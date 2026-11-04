@@ -38,6 +38,8 @@ export class CpOnAwsProxy extends Construct {
       memorySize: 256,
       // Long non-streaming Opus completions on the fallback path.
       timeout: Duration.minutes(15),
+      // Links the function's own segment (init, invocation) to the gateway trace.
+      tracing: lambda.Tracing.ACTIVE,
       logGroup,
       environment: {
         UPSTREAM_URL: ONE_P.endpoint,

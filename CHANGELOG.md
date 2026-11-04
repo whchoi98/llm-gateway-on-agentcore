@@ -15,7 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Claude Code works through the gateway: the interceptor rewrites `metadata.user_id`, which Claude Code sends as a JSON string, into the character set and 256-character limit of Bedrock request metadata (it was rejected with 400)
+
 ### Added
+- CloudWatch dashboard: fallbacks by model, interceptor denials by reason (new `Denied` EMF metric), Bedrock tokens per minute and throttles per primary model, and span tables from `aws/spans`; Active X-Ray tracing on the interceptor and CPonAWS proxy Lambdas
 - Add an LLM gateway on Amazon Bedrock AgentCore Gateway in ap-northeast-2 with one `/inference` endpoint for the Anthropic, OpenAI, and Bedrock SDKs
 - Add Bedrock Global CRIS primary routes for Claude 5.5 and GPT 6.x
 - Add Claude fallback to Claude Platform on AWS through a streaming Lambda proxy
@@ -44,7 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Claude Code가 gateway를 거쳐 동작합니다. Claude Code는 `metadata.user_id`를 JSON 문자열로 보내는데, Bedrock request metadata의 허용 문자와 256자 제한에 걸려 400으로 거부되었습니다. 이제 interceptor가 이 값을 허용 형식으로 바꿉니다.
+
 ### Added
+- CloudWatch 대시보드에 모델별 fallback, 사유별 interceptor 거부(새 `Denied` EMF 메트릭), primary 모델별 Bedrock 분당 토큰과 throttle, `aws/spans` 기반 span 표를 추가하고, interceptor와 CPonAWS proxy Lambda에 X-Ray Active tracing을 켰습니다.
 - Anthropic, OpenAI, Bedrock SDK용 `/inference` 단일 엔드포인트를 갖춘 ap-northeast-2 Amazon Bedrock AgentCore Gateway 기반 LLM Gateway 추가
 - Claude 5.5와 GPT 6.x의 Bedrock Global CRIS primary route 추가
 - 스트리밍 Lambda 프록시를 거치는 Claude Platform on AWS Claude fallback 추가

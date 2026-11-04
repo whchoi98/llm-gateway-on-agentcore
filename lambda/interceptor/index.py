@@ -21,7 +21,11 @@ Responsibilities
      fails closed: the ID is URL-decoded and an ARN is reduced to the model it
      names, any other `/model/` operation is refused, and so is a model the
      gateway does not declare (on every dialect).
-4. Per-team usage metrics — CloudWatch Embedded Metric Format (EMF) records.
+4. Request repair — the bedrock-runtime connector passes Anthropic
+   `metadata.user_id` to Bedrock request metadata, which allows only
+   `[A-Za-z0-9 :_@$#=/+,.-]` and 256 characters. Claude Code sends a JSON string
+   there, so Messages requests get a Bedrock-safe `user_id`.
+5. Per-team usage metrics — CloudWatch Embedded Metric Format (EMF) records.
 
 Inference targets use the `http` interceptor payload: the body is a base64 string.
 """
@@ -30,6 +34,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 import urllib.parse
 
@@ -52,6 +57,9 @@ TEAM_CLIENTS = json.loads(os.environ.get("TEAM_CLIENTS", "{}"))
 PREMIUM_SCOPE = os.environ.get("PREMIUM_SCOPE", "llm-gateway/premium")
 INVOKE_OPERATIONS = ("invoke", "invoke-with-response-stream")
 TOKEN_FIELDS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
+# Bedrock request metadata values: this character set, at most 256 characters.
+METADATA_UNSAFE = re.compile(r"[^A-Za-z0-9\s:_@$#=/+,.-]")
+METADATA_MAX = 256
 
 # Fail fast: a slow guardrail call must not stall every LLM request.
 _bedrock = boto3.client(
@@ -152,6 +160,19 @@ def _path_model(path: str):
     return model_id.rsplit("/", 1)[-1] if model_id.startswith("arn:") else model_id
 
 
+def _bedrock_safe_user_id(value):
+    """`metadata.user_id` Bedrock accepts: a JSON object becomes `k=v,...`, other characters `_`."""
+    if not isinstance(value, str):
+        return value
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        value = ",".join(f"{k}={v}" for k, v in parsed.items() if v not in (None, ""))
+    return METADATA_UNSAFE.sub("_", value)[:METADATA_MAX]
+
+
 def _parse_body(encoded):
     if not encoded:
         return None
@@ -238,22 +259,24 @@ def _apply_guardrail(text: str):
 # Metrics (EMF)
 # ---------------------------------------------------------------------------
 def _emit(team: str, model: str, dialect: str, blocked: bool, guardrail_ms: float, guardrail_error: bool, extra: dict):
-    record = {
-        "_aws": {
-            "Timestamp": int(time.time() * 1000),
-            "CloudWatchMetrics": [
-                {
-                    "Namespace": METRICS_NAMESPACE,
-                    "Dimensions": [["Team"], ["Model"], ["Team", "Model"]],
-                    "Metrics": [
-                        {"Name": "Requests", "Unit": "Count"},
-                        {"Name": "GuardrailBlocked", "Unit": "Count"},
-                        {"Name": "GuardrailErrors", "Unit": "Count"},
-                        {"Name": "GuardrailLatency", "Unit": "Milliseconds"},
-                    ],
-                }
+    directives = [
+        {
+            "Namespace": METRICS_NAMESPACE,
+            "Dimensions": [["Team"], ["Model"], ["Team", "Model"]],
+            "Metrics": [
+                {"Name": "Requests", "Unit": "Count"},
+                {"Name": "GuardrailBlocked", "Unit": "Count"},
+                {"Name": "GuardrailErrors", "Unit": "Count"},
+                {"Name": "GuardrailLatency", "Unit": "Milliseconds"},
             ],
-        },
+        }
+    ]
+    denied = extra.get("denied")
+    if denied:  # one of the fixed denial kinds in lambda_handler, safe as a dimension
+        directives.append({"Namespace": METRICS_NAMESPACE, "Dimensions": [["Reason"], ["Team", "Reason"]],
+                           "Metrics": [{"Name": "Denied", "Unit": "Count"}]})
+    record = {
+        "_aws": {"Timestamp": int(time.time() * 1000), "CloudWatchMetrics": directives},
         "Team": team,
         "Model": model or "unknown",
         "Dialect": dialect,
@@ -263,6 +286,8 @@ def _emit(team: str, model: str, dialect: str, blocked: bool, guardrail_ms: floa
         "GuardrailLatency": round(guardrail_ms, 1),
         **extra,
     }
+    if denied:
+        record.update(Reason=denied, Denied=1)
     print(json.dumps(record, ensure_ascii=False))
 
 
@@ -338,8 +363,17 @@ def lambda_handler(event, context):
         return _deny(dialect, 400, "content_policy_violation",
                      f"Request blocked by the LLM Gateway input guardrail ({reason}).")
 
+    changed = False
     if dispatched != requested:
         body["model"] = dispatched
+        changed = True
+    meta = body.get("metadata")
+    if dialect == "anthropic" and isinstance(meta, dict) and "user_id" in meta:
+        safe = _bedrock_safe_user_id(meta["user_id"])
+        if safe != meta["user_id"]:
+            meta["user_id"] = safe
+            changed = True
+    if changed:
         return {
             "interceptorOutputVersion": "1.0",
             "http": {"transformedGatewayRequest": {"body": base64.b64encode(json.dumps(body).encode()).decode()}},

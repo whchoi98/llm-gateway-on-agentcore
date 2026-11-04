@@ -118,6 +118,19 @@ def t_alias():
     record("dynamic claude-auto (medium→sonnet)", resp.model == SONNET, f"served_by={served_by(resp.id)} model={resp.model}")
 
 
+@check("metadata")
+def t_metadata():
+    # Claude Code sends metadata.user_id as a JSON string; Bedrock request metadata rejects braces,
+    # quotes and values over 256 characters, so the interceptor rewrites it.
+    for label, user_id in (("json user_id", '{"device_id":"abc","account_uuid":"","session_id":"1234"}'),
+                           ("300-char user_id", "a" * 300)):
+        try:
+            resp, _ = ask("team-standard", HAIKU, metadata={"user_id": user_id})
+            record(f"metadata: {label} accepted", True, f"served_by={served_by(resp.id)}")
+        except anthropic.APIStatusError as e:
+            record(f"metadata: {label} accepted", False, f"{e.status_code} {str(e.body)[:120]}")
+
+
 @check("openai-sdk")
 def t_openai():
     # Bedrock serves Claude only in the Messages / InvokeModel schema; the
@@ -434,7 +447,7 @@ def t_routing_evidence():
 
 
 RAN: set = set()
-CHECKS = [t_models, t_route_3p, t_streaming, t_alias, t_openai, t_bedrock_sdk, t_guardrail, t_policy, t_failover,
+CHECKS = [t_models, t_route_3p, t_streaming, t_alias, t_metadata, t_openai, t_bedrock_sdk, t_guardrail, t_policy, t_failover,
           t_experiment, t_gpt, t_rate_limit, t_quota_headroom, t_routing_evidence]
 
 

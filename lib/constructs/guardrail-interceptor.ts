@@ -120,6 +120,8 @@ export class GuardrailInterceptor extends Construct {
       code: lambda.Code.fromAsset(path.join(__dirname, '..', '..', 'lambda', 'interceptor')),
       memorySize: 512,
       timeout: Duration.seconds(10),
+      // Links the function's own segment (init, invocation) to the gateway trace.
+      tracing: lambda.Tracing.ACTIVE,
       logGroup,
       environment: {
         GUARDRAIL_ID: this.guardrail.attrGuardrailId,

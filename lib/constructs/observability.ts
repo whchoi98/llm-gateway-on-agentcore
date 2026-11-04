@@ -183,8 +183,9 @@ export class Observability extends Construct {
       new cloudwatch.TextWidget({
         markdown:
           `# LLM Gateway (${stack.region})\n` +
-          `Primary **Bedrock Global CRIS** (3P, target \`${TARGET_BEDROCK}\`) → fallback **Claude Platform on AWS** (1P, target \`${TARGET_ANTHROPIC}\`). ` +
-          `Routing decisions: \`${this.logGroup.logGroupName}\` (\`body.routing\`).`,
+          `Primary **Bedrock Global CRIS** (3P, target \`${TARGET_BEDROCK}\`). Fallback: Claude to **Claude Platform on AWS** (1P, target \`${TARGET_ANTHROPIC}\`), ` +
+          `GPT to **Bedrock Mantle us-east-1** (target \`${TARGET_MANTLE}\`). Routing decisions: \`${this.logGroup.logGroupName}\` (\`body.routing\`); ` +
+          `spans: \`aws/spans\` (X-Ray, Transaction Search).`,
         width: 24,
         height: 2,
       }),
@@ -273,6 +274,75 @@ export class Observability extends Construct {
       }),
     );
     this.dashboard.addWidgets(...lambdaWidgets);
+
+    // Fallback detail, interceptor denials, and quota pressure on the primary.
+    const bedrock = (metricName: string, modelId: string) =>
+      new cloudwatch.Metric({ namespace: 'AWS/Bedrock', metricName, dimensionsMap: { ModelId: modelId }, statistic: 'Sum', period: Duration.minutes(1) });
+    this.dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'Fallbacks by model (excl. drills)',
+        left: [
+          new cloudwatch.MathExpression({
+            expression: `SEARCH('{${ns},Model,Target} MetricName="FallbackServed"', 'Sum', 60)`,
+            label: '',
+            period: Duration.minutes(1),
+          }),
+        ],
+        width: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Interceptor denials by reason',
+        left: [
+          new cloudwatch.MathExpression({
+            expression: `SEARCH('{${ns},Reason} MetricName="Denied"', 'Sum', 60)`,
+            label: '',
+            period: Duration.minutes(1),
+          }),
+        ],
+        width: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Bedrock tokens per minute (primary, input + output)',
+        left: MODELS.map((m, i) =>
+          new cloudwatch.MathExpression({
+            expression: `in${i} + out${i}`,
+            usingMetrics: { [`in${i}`]: bedrock('InputTokenCount', m.bedrockModel), [`out${i}`]: bedrock('OutputTokenCount', m.bedrockModel) },
+            label: `${m.canonical} (gateway cap ${m.tpm / 1_000_000}M)`,
+            period: Duration.minutes(1),
+          }),
+        ),
+        width: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Bedrock throttles (primary)',
+        left: MODELS.map((m) => bedrock('InvocationThrottles', m.bedrockModel).with({ label: m.canonical })),
+        width: 6,
+      }),
+    );
+    const httpSpans = "filter name like /^AgentCore\\.Gateway\\.Http\\./";
+    this.dashboard.addWidgets(
+      new cloudwatch.LogQueryWidget({
+        title: 'Target calls by target and status (spans)',
+        logGroupNames: ['aws/spans'],
+        queryLines: [
+          httpSpans,
+          'stats count(*) as calls, avg(durationNano) / 1000000 as avg_ms, pct(durationNano, 90) / 1000000 as p90_ms by name, attributes.http.status_code as status',
+          'sort calls desc',
+        ],
+        width: 12,
+      }),
+      new cloudwatch.LogQueryWidget({
+        title: 'Requests served by a fallback target (spans, incl. drills; open traceId in X-Ray)',
+        logGroupNames: ['aws/spans'],
+        queryLines: [
+          "filter name in ['AgentCore.Gateway.Http.cponaws', 'AgentCore.Gateway.Http.mantle']",
+          'fields @timestamp, name, traceId, durationNano / 1000000 as ms, attributes.http.status_code as status',
+          'sort @timestamp desc',
+          'limit 20',
+        ],
+        width: 12,
+      }),
+    );
 
     // -------------------------------------------------------------- alarms
     this.alarmTopic = new sns.Topic(this, 'AlarmTopic', { topicName: `${GATEWAY_NAME}-alarms` });
