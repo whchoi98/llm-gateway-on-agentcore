@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add vended logs and traces, fallback metric filters, a CloudWatch dashboard, and alarms
 - Add live smoke tests and English and Korean diagrams: architecture, request flow, fallback sequence, and deploy order
 
+### Security
+- The interceptor fails closed on InvokeModel paths, where Cedar cannot see the model: it URL-decodes the model ID, reduces an inference-profile ARN to the model it names, enforces premium models (including `claude-experiment`) and the output-token cap, and refuses undeclared models and any `/model/` operation other than invoke
+- The Claude Platform on AWS workspace ID moved out of the repository into the SSM parameter `/llm-gateway/anthropic-workspace-id`, which `scripts/set-cponaws-key.sh` writes and CloudFormation resolves at deploy time
+
 ---
 
 <a id="korean"></a>
@@ -50,3 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Alias, `claude-auto` 동적 route, 가중치 A/B 실험, failover drill 추가
 - Vended log와 trace, fallback metric filter, CloudWatch 대시보드, 알람 추가
 - 실환경 smoke test와 영문, 한국어 다이어그램(아키텍처, 요청 흐름, fallback 시퀀스, 배포 순서) 추가
+
+### Security
+- Cedar가 model을 볼 수 없는 InvokeModel 경로에서 interceptor가 fail-closed로 동작합니다. model ID를 URL 디코딩하고 inference-profile ARN은 가리키는 모델로 줄인 뒤, premium 모델(`claude-experiment` 포함)과 출력 토큰 한도를 검사하며, 미등록 모델과 invoke 외의 `/model/` 경로는 거부합니다.
+- Claude Platform on AWS workspace ID를 저장소에서 빼서 SSM 파라미터 `/llm-gateway/anthropic-workspace-id`로 옮겼습니다. `scripts/set-cponaws-key.sh`가 이 파라미터를 쓰고, CloudFormation이 배포할 때 값을 채웁니다.

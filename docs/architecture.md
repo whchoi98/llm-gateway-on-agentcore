@@ -28,7 +28,7 @@ Rendered diagrams: [architecture.en.png](architecture.en.png), [request-flow.en.
 - **lib/llm-gateway-stack.ts** -- AgentCore Gateway with the CUSTOM_JWT authorizer, per-team and per-model rate limits, and routing rules that pin each model to a primary and a fallback destination.
 
 ### Processing Layer
-- **lambda/interceptor/** -- REQUEST interceptor: `claude-auto` routing, guardrail, API-dialect and premium checks, per-team EMF metrics.
+- **lambda/interceptor/** -- REQUEST interceptor: `claude-auto` routing, guardrail, API-dialect checks, the premium and token-cap checks on InvokeModel paths (which Cedar cannot see), refusal of undeclared models, per-team EMF metrics.
 - **lambda/cponaws-proxy/** -- Lambda Function URL (AWS_IAM, response streaming) that adds the `anthropic-workspace-id` header and the API key before calling Claude Platform on AWS.
 
 ### AI/ML Layer
@@ -264,7 +264,7 @@ Anthropic Messages, OpenAI Chat Completions와 Responses, Bedrock InvokeModel AP
 - **lib/llm-gateway-stack.ts** -- CUSTOM_JWT authorizer, 팀별, 모델별 요청 한도, 모델마다 primary와 fallback 목적지를 고정하는 라우팅 rule을 갖춘 AgentCore Gateway입니다.
 
 ### Processing Layer
-- **lambda/interceptor/** -- REQUEST interceptor입니다. `claude-auto` 라우팅, 가드레일, API dialect와 premium 검사, 팀별 EMF 메트릭을 맡습니다.
+- **lambda/interceptor/** -- REQUEST interceptor입니다. `claude-auto` 라우팅, 가드레일, API dialect 검사, Cedar가 볼 수 없는 InvokeModel 경로의 premium과 토큰 한도 검사, 미등록 모델 거부, 팀별 EMF 메트릭을 맡습니다.
 - **lambda/cponaws-proxy/** -- Lambda Function URL(AWS_IAM, 응답 스트리밍)입니다. `anthropic-workspace-id` 헤더와 API 키를 붙여 Claude Platform on AWS를 호출합니다.
 
 ### AI/ML Layer

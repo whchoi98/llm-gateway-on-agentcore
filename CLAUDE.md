@@ -16,16 +16,16 @@ bin/app.ts      CDK app: LlmGatewayStack, then LlmGatewayPolicyStack (Cedar)
 lib/config.ts   the only place models, fallbacks, teams, and limits are declared
 lib/            stacks and constructs (see lib/CLAUDE.md)
 lambda/         interceptor and cponaws-proxy handlers (see lambda/CLAUDE.md)
-scripts/        smoke_test.py (live E2E), set-cponaws-key.sh, gwlib.py
+scripts/        smoke_test.py (live E2E), set-cponaws-key.sh, gwlib.py; diagrams/ (diagram generator)
 docs/           architecture.md, rendered diagrams (*.en/*.ko .svg/.png), reference/
 ```
 
 ## Conventions
 - Add or change a model, route, team, or limit in `lib/config.ts` only; rules, IAM resources, rate-limit entries, interceptor maps, and the dashboard are derived from it.
-- The CPonAWS key secret `llm-gateway/anthropic-api-key` lives outside the stacks and is set with `scripts/set-cponaws-key.sh`: the 1P target validates it when created, and a stack-owned secret would be deleted on rollback.
+- The CPonAWS key secret `llm-gateway/anthropic-api-key` and the workspace ID parameter `/llm-gateway/anthropic-workspace-id` live outside the stacks and are set with `scripts/set-cponaws-key.sh`: the 1P target validates the key when created, and a stack-owned secret would be deleted on rollback. Never commit the workspace ID; the repository is public.
 - Do not read secret values through the shell; this environment blocks `get-secret-value`. Pass `{{resolve:secretsmanager:<id>:SecretString:<key>}}` through the aws-core `asm-exec` wrapper instead.
 - `npm run build` does not exercise routing, policies, or Lambda code. After changing those, deploy and run the matching `uv run scripts/smoke_test.py --only <check>`.
-- Diagrams are generated, not hand-edited: change the generator, then re-export both languages, because README embeds the `.en` and `.ko` images in its two halves.
+- Diagrams are generated, not hand-edited: change `scripts/diagrams/build.py`, then run `scripts/diagrams/export.sh`, which re-exports both languages (README embeds the `.en` and `.ko` images in its two halves) and fails on a sublabel overflow, a geometry finding, or a `·` in the SVGs. The Mermaid copies in README and `docs/architecture.md` are hand-edited and identical in both halves.
 
 ## Key Commands
 ```bash
@@ -36,6 +36,7 @@ npx cdk diff --all                             # review before every deploy
 npx cdk deploy --all                           # core stack, then the policy stack (ap-northeast-2)
 uv run scripts/smoke_test.py                   # live E2E against the deployed gateway; needs AWS credentials, small cost
 uv run scripts/smoke_test.py --only gpt routing-evidence
+bash scripts/diagrams/export.sh                # rebuild, export, verify diagrams; set PLAYWRIGHT_CORE and CHROMIUM
 bash tests/run-all.sh                          # harness tests
 ```
 
