@@ -1,0 +1,15 @@
+node_modules/
+cdk.out/
+*.js
+!lambda/**/*.js
+.venv/
+__pycache__/
+.remember/
+.env
+.claude/settings.local.json
+.claude/worktrees/
+cdk-outputs.json
+*.log
+# Amazon Ember webfonts copied from the aws-diagram-design skill by scripts/diagrams/build.py;
+# not redistributed here (see the skill's Amazon Ember licensing guidelines)
+docs/fonts/
