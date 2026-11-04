@@ -4,7 +4,7 @@
 <a href="#english"><img src="https://img.shields.io/badge/lang-English-blue.svg" alt="English"></a>
 <a href="#korean"><img src="https://img.shields.io/badge/lang-한국어-red.svg" alt="Korean"></a>
 
-One LLM endpoint on Amazon Bedrock AgentCore Gateway (Seoul) for Claude and GPT, with Bedrock Global CRIS first and automatic fallback | Amazon Bedrock AgentCore Gateway(서울) 위의 Claude, GPT 단일 LLM 엔드포인트, Bedrock Global CRIS 우선과 자동 fallback
+One endpoint for Claude and GPT on Amazon Bedrock AgentCore Gateway in Seoul. Bedrock Global CRIS first, automatic fallback | 서울 리전 Amazon Bedrock AgentCore Gateway의 Claude, GPT 단일 엔드포인트. Bedrock Global CRIS를 먼저 시도하고 실패하면 자동으로 fallback
 
 ---
 
@@ -14,17 +14,19 @@ One LLM endpoint on Amazon Bedrock AgentCore Gateway (Seoul) for Claude and GPT,
 
 ## Overview
 
-An LLM gateway built on Amazon Bedrock AgentCore Gateway in ap-northeast-2 (Seoul). Clients call one endpoint for Claude 5.5 (Opus, Sonnet, Haiku) and GPT 6.x (6.1 Sol, 6.1 Terra, 6 Astra, 6 Sol, 6 Luna). Every request goes to **Bedrock Global CRIS** first and falls back automatically per model family: Claude to **Claude Platform on AWS (1P, CPonAWS)**, GPT to **Bedrock Mantle in us-east-1** (in-Region model IDs, separate capacity and quotas).
+An LLM gateway built on Amazon Bedrock AgentCore Gateway in ap-northeast-2 (Seoul). Clients call one endpoint for Claude 5.5 (Opus, Sonnet, Haiku) and GPT 6.x (6.1 Sol, 6.1 Terra, 6 Astra, 6 Sol, 6 Luna).
+
+Every request goes to Bedrock Global CRIS first. When it fails, the gateway falls back by model family: Claude to Claude Platform on AWS (1P, CPonAWS), GPT to Bedrock Mantle in us-east-1. Mantle uses in-Region model IDs and has its own capacity and quotas.
 
 <!-- TODO: add a demo image or GIF -->
 
 ## Features
 
-- **Per-family fallback** — Bedrock Global CRIS primary; Claude falls back to Claude Platform on AWS and GPT to Bedrock Mantle us-east-1 on 429, 5XX, 408, 403, connection errors, and first-byte timeouts, with a circuit breaker.
-- **One endpoint, three SDKs** — Anthropic Messages, OpenAI Chat Completions and Responses, and Bedrock InvokeModel on `/inference`; clients hold only a Cognito JWT.
-- **Team governance** — per-team RPM, TPM, and concurrent-connection limits, Cedar policies for premium models and output-token caps, and a Bedrock Guardrail on every path.
-- **Routing controls** — aliases, interceptor-driven `claude-auto`, a 90/10 A/B experiment, and failover drills that exercise each fallback on demand.
-- **Observability** — vended routing logs and traces, metric filters that count fallbacks, a CloudWatch dashboard, and alarms.
+- Each model family has its own fallback. Bedrock Global CRIS is the primary for every model. A 429, 5XX, 408, or 403, a connection error, or a first-byte timeout triggers the fallback. Claude then moves to Claude Platform on AWS, and GPT to Bedrock Mantle in us-east-1. A circuit breaker skips a primary that keeps failing.
+- One endpoint, `/inference`, accepts Anthropic Messages, OpenAI Chat Completions and Responses, and Bedrock InvokeModel. Clients need only a Cognito JWT.
+- Each team has its own RPM, TPM, and concurrent-connection limits. Cedar policies set the premium models and the output-token cap, and a Bedrock Guardrail checks requests on every path.
+- Routing supports aliases, `claude-auto` (the interceptor picks a model by prompt size), and a 90/10 A/B experiment. Failover drills exercise each fallback on demand.
+- Vended routing logs and traces record which destination served each request. Metric filters count fallbacks for a CloudWatch dashboard and alarms.
 
 ## Architecture
 
@@ -32,11 +34,11 @@ An LLM gateway built on Amazon Bedrock AgentCore Gateway in ap-northeast-2 (Seou
 
 ![LLM Gateway request flow](docs/request-flow.en.png)
 
-The same fallback over time: with the circuit breaker closed, the gateway tries Bedrock first and moves on after a trigger; with it open, the gateway skips the primary.
+The sequence below shows the same fallback over time. With the circuit breaker closed, the gateway tries Bedrock first and moves on when a trigger fires. With the breaker open, it skips the primary.
 
 ![Fallback over time](docs/fallback-sequence.en.png)
 
-Request flow as a Mermaid summary (same zones and colors as the diagrams above):
+The Mermaid chart below summarizes the request flow, with the zones and colors of the diagrams above.
 
 ```mermaid
 %%{init: {"flowchart": {"wrappingWidth": 400, "subGraphTitleMargin": {"top": 4, "bottom": 16}}}}%%
@@ -80,7 +82,7 @@ flowchart LR
   linkStyle 7,8 stroke:#EC7211,stroke-width:2px
 ```
 
-Details: [docs/architecture.md](docs/architecture.md). Vector versions: [architecture.en.svg](docs/architecture.en.svg), [request-flow.en.svg](docs/request-flow.en.svg), [fallback-sequence.en.svg](docs/fallback-sequence.en.svg), [deploy-order.en.svg](docs/deploy-order.en.svg); interactive page: [docs/architecture.en.html](docs/architecture.en.html).
+[docs/architecture.md](docs/architecture.md) describes each component. The diagrams are also available as SVG: [architecture](docs/architecture.en.svg), [request flow](docs/request-flow.en.svg), [fallback sequence](docs/fallback-sequence.en.svg), and [deploy order](docs/deploy-order.en.svg). [docs/architecture.en.html](docs/architecture.en.html) shows all four on one page.
 
 | Model the client sends | API | Primary | Fallback |
 |---|---|---|---|
@@ -90,7 +92,7 @@ Details: [docs/architecture.md](docs/architecture.md). Vector versions: [archite
 | `gpt-6.1-sol`, `openai.gpt-6.1-sol`, `global.openai.gpt-6.1-sol` | Chat Completions, Responses | bedrock / `global.openai.gpt-6.1-sol` | mantle / `openai.gpt-6.1-sol` |
 | `gpt-6.1-terra`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna` (same forms) | Chat Completions, Responses | bedrock / `global.openai.<model>` | mantle / `openai.<model>` |
 | `claude-auto` | Messages | interceptor picks a Bedrock Claude model by prompt size | cponaws / `claude-sonnet-5-5` |
-| `claude-experiment` | Messages | 90% Sonnet / 10% Opus (`weightedRoute`) | each leg's fallback |
+| `claude-experiment` | Messages | Sonnet 90%, Opus 10% (`weightedRoute`) | each leg's fallback |
 | `claude-haiku-5-5-failover-drill` | Messages | primary with a 50 ms first-byte timeout (always stalls) | cponaws / `claude-haiku-5-5` |
 | `gpt-6-luna-failover-drill` | Chat Completions, Responses | primary with a 50 ms first-byte timeout (always stalls) | mantle / `openai.gpt-6-luna` |
 
@@ -101,7 +103,7 @@ Details: [docs/architecture.md](docs/architecture.md). Vector versions: [archite
 | Credential abstraction | Clients hold only a Cognito JWT; the gateway role signs to Bedrock, Mantle, and the CPonAWS proxy, and only the proxy reads the CPonAWS key | `lib/constructs/cponaws-proxy.ts` |
 | Model routing and fallback | `matchModels` rules with `staticRoute.model` and a `fallback` chain | `lib/config.ts` |
 | A/B testing | `weightedRoute` 90/10 | `lib/config.ts` |
-| Team quotas | `$.context.jwt.client_id` RPM/TPM/connections; `qualifiedModelId` TPM | `lib/llm-gateway-stack.ts` |
+| Team quotas | RPM, TPM, and connections per `$.context.jwt.client_id`; TPM per `qualifiedModelId` | `lib/llm-gateway-stack.ts` |
 | RBAC and token caps | Cedar policies; on InvokeModel paths the interceptor enforces premium models and the token cap, and refuses unknown models | `lib/policy-stack.ts`, `lambda/interceptor/index.py` |
 | Guardrail | Bedrock Guardrail (Standard tier, APAC profile) | `lib/constructs/guardrail-interceptor.ts` |
 | Dynamic routing | `claude-auto` in the interceptor | `lambda/interceptor/index.py` |
@@ -135,14 +137,14 @@ npx cdk diff --all
 npx cdk deploy --all
 ```
 
-- The CPonAWS target lists models when it is created and fails on a bad key, so the key secret is a prerequisite that the stacks do not own.
-- Without a key yet, deploy with `-c enable1p=false` (no Claude fallback).
+- The CPonAWS target lists models when it is created and fails if the key is wrong. That is why the key secret is a prerequisite outside the stacks.
+- Without a key yet, deploy with `-c enable1p=false`. Claude then runs without a fallback.
 - `-c policyMode=LOG_ONLY` records Cedar decisions without denying requests.
 - `-c alarmEmail=you@example.com` subscribes an e-mail address to the alarms.
 
 ## Usage
 
-Get an access token from the team secret `llm-gateway/clients/<team>` (`client_id`, `client_secret`, `token_url`); `scripts/gwlib.py` `token()` shows the request.
+Each team's secret `llm-gateway/clients/<team>` holds the `client_id`, `client_secret`, and `token_url` for an access token. `token()` in `scripts/gwlib.py` shows the request.
 
 ```python
 import anthropic
@@ -166,7 +168,7 @@ br = boto3.client("bedrock-runtime", region_name="ap-northeast-2", endpoint_url=
 br.invoke_model(modelId="global.anthropic.claude-haiku-5-5", contentType="application/json", body=...)
 ```
 
-To see who served a request: a Claude response `id` starting with `msg_bdrk_` came from Bedrock, and any other `msg_` id from CPonAWS; a GPT response `model` of `global.openai.*` came from Bedrock Global CRIS, and `openai.*` from Mantle.
+The response shows which destination served it. A Claude `id` that starts with `msg_bdrk_` came from Bedrock, and any other `msg_` ID from CPonAWS. A GPT `model` of `global.openai.*` came from Bedrock Global CRIS, and `openai.*` from Mantle.
 
 ## Configuration
 
@@ -178,7 +180,7 @@ To see who served a request: a Claude response `id` starting with `msg_bdrk_` ca
 | `ANTHROPIC_WORKSPACE_ID` | Seoul workspace ID for `scripts/set-cponaws-key.sh`, stored in the SSM parameter `/llm-gateway/anthropic-workspace-id` | the existing parameter, else a prompt |
 | `EVIDENCE_SINCE` | Epoch seconds from which `smoke_test.py --only routing-evidence` reads routing logs | start of the run |
 
-Models, fallbacks, teams, and limits live in `lib/config.ts`. Workspaces are region-bound, so the workspace ID must be a Seoul workspace; it is kept out of the repository in an SSM parameter that CloudFormation resolves at deploy time.
+Models, fallbacks, teams, and limits are declared in `lib/config.ts`. Workspaces are region-bound, so use a Seoul workspace. Its ID is kept out of the repository in an SSM parameter, which CloudFormation resolves at deploy time.
 
 ## Project Structure
 
@@ -209,7 +211,7 @@ uv run scripts/smoke_test.py --only gpt failover routing-evidence
 
 ## API Documentation
 
-The gateway exposes these paths under `https://<gateway-id>.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/inference`, all with `Authorization: Bearer <Cognito access token>`:
+The base URL is `https://<gateway-id>.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/inference`. Every request needs `Authorization: Bearer <Cognito access token>`.
 
 | Path | API | Models |
 |---|---|---|
@@ -223,7 +225,7 @@ The gateway exposes these paths under `https://<gateway-id>.gateway.bedrock-agen
 
 1. Create a branch (`git checkout -b feat/<name>`)
 2. Change `lib/config.ts` for model or limit changes; keep docs in the same commit
-3. Run `npm run build` and `bash tests/run-all.sh`; after a routing, policy, or Lambda change, deploy and run the matching `smoke_test.py` check
+3. Run `npm run build` and `bash tests/run-all.sh`. After a routing, policy, or Lambda change, also deploy and run the matching `smoke_test.py` check
 4. Commit (`git commit -m 'feat: <change>'`) and open a pull request
 
 ## License
@@ -238,26 +240,27 @@ No license file yet.
 
 ## Verified Behavior
 
-- **Rules match the model as the client sent it, before the interceptor runs.** Static aliases therefore live in rule `matchModels`; an interceptor rewrite takes effect only on a route whose primary pins no model (`claude-auto`).
-- **Each model family has one API schema on Bedrock.** Claude is served only as Messages or InvokeModel and GPT only in the OpenAI schemas; a mismatched request gets a 400 that names the right SDK.
-- **Claude 5.5 Global CRIS is offered only on `bedrock-runtime`**, and GPT 6.x in-Region IDs only on Mantle us-east-1 under `/openai/v1`. From Seoul the `us.` profiles cannot be called.
-- **A provider target calls `GET /v1/models` when it is created** and fails on a bad credential, so the CPonAWS key is a deploy prerequisite.
-- **CPonAWS needs `anthropic-workspace-id` on every request.** A gateway target cannot add static headers and the creation-time discovery call bypasses interceptors, hence the streaming Lambda proxy.
-- **Cedar reads `context.input.<field>` only behind a `has` guard**; without it validation rejects the forbid as "Overly Restrictive". InvokeModel's model ID is in the URI, so the interceptor enforces premium models and the token cap there, after URL-decoding the ID and reducing an ARN to the model it names.
-- **Guardrails in Policy is not offered in ap-northeast-2**, so the interceptor calls `ApplyGuardrail`; `GUARDRAIL_FAIL_MODE` defaults to `open`, with an alarm.
-- **An unservable model ID can return HTTP 200 with an error body** (from Seoul, the bare `anthropic.claude-haiku-5-5`), which is not fallback-eligible; the drills use a 50 ms first-byte timeout instead.
-- **Vended routing logs are best effort**: they arrive 20 to 80 seconds late and out of order, and one line in the tests never arrived; use them for trends, not per-request accounting.
-- **Inference metrics are in the `ApplicationSignals` namespace**, not `AWS/Bedrock-AgentCore`, which holds the Cedar and identity metrics.
-- **aws-cdk-lib's `CfnGatewayRule` lacks `MatchModels`, `Model`, and `Fallback`** and drops them silently, so rules are raw `CfnResource`; synth prints F3018 warnings for them.
+- Rules match the model as the client sent it, before the interceptor runs. Static aliases therefore belong in a rule's `matchModels`. An interceptor rewrite takes effect only on a route whose primary pins no model, such as `claude-auto`.
+- Bedrock serves each model family in one API schema. Claude is served only through Messages or InvokeModel, and GPT only through the OpenAI schemas. A mismatched request gets a 400 that names the right SDK.
+- Claude 5.5 Global CRIS is offered only on `bedrock-runtime`, and the GPT 6.x in-Region IDs only on Mantle us-east-1 under `/openai/v1`.
+- A provider target calls `GET /v1/models` when it is created and fails on a bad credential. That makes the CPonAWS key a deploy prerequisite.
+- CPonAWS needs `anthropic-workspace-id` on every request. A gateway target cannot add static headers, and the discovery call at creation time bypasses interceptors. A streaming Lambda proxy therefore adds the header.
+- Cedar reads `context.input.<field>` only behind a `has` guard. Without the guard, validation rejects the forbid as "Overly Restrictive".
+- InvokeModel carries the model ID in the URI, where Cedar cannot see it. The interceptor enforces premium models and the token cap on that path, after URL-decoding the ID and reducing an ARN to the model it names.
+- Guardrails in Policy is not offered in ap-northeast-2, so the interceptor calls `ApplyGuardrail`. `GUARDRAIL_FAIL_MODE` defaults to `open`, with an alarm.
+- An unservable model ID can return HTTP 200 with an error body (from Seoul, the bare `anthropic.claude-haiku-5-5`). That response is not fallback-eligible, so the drills use a 50 ms first-byte timeout instead.
+- Vended routing logs are best effort. They arrive 20 to 80 seconds late and out of order, and one line in the tests never arrived. Use them for trends, not per-request accounting.
+- Inference metrics are in the `ApplicationSignals` namespace. `AWS/Bedrock-AgentCore` holds only the Cedar and identity metrics.
+- aws-cdk-lib's `CfnGatewayRule` lacks `MatchModels`, `Model`, and `Fallback` and drops them silently. The rules are therefore raw `CfnResource`, and synth prints F3018 warnings for them.
 
 ## Operational Notes
 
-- **First-byte timeouts**: Opus and GPT 180 s, Sonnet and GPT 6 Luna 120 s, Haiku 60 s. A non-streaming response sends its first byte only when generation ends; clients that stream let a stall be detected sooner.
-- **No fallback after a stream starts**: if a stream fails after the first byte, the client must retry.
-- **Each fallback attempt is billed as a gateway invocation**; an open circuit breaker skips a failing primary.
-- **Data residency**: during a GPT fallback, data goes to us-east-1.
-- **Rate limits are token buckets**: a burst can briefly exceed the per-minute number.
-- **matchPrincipals conditions match IAM principals only**, so this JWT-based gateway does not use them.
+- First-byte timeouts are 180 s for Opus and GPT, 120 s for Sonnet and GPT 6 Luna, and 60 s for Haiku. A non-streaming response sends its first byte only when generation ends, so a client that streams lets the gateway detect a stall sooner.
+- The gateway cannot fall back after a stream has started. If a stream fails after the first byte, the client must retry.
+- Each fallback attempt is billed as a gateway invocation. An open circuit breaker skips a failing primary.
+- During a GPT fallback, data goes to us-east-1.
+- Rate limits are token buckets, so a burst can briefly exceed the per-minute number.
+- `matchPrincipals` conditions match IAM principals only, so this JWT-based gateway does not use them.
 
 ## Cleanup
 
@@ -274,17 +277,19 @@ aws secretsmanager delete-secret --secret-id llm-gateway/anthropic-api-key --reg
 
 ## 개요
 
-ap-northeast-2(서울)의 Amazon Bedrock AgentCore Gateway로 만든 LLM Gateway입니다. 클라이언트는 엔드포인트 하나로 Claude 5.5(Opus, Sonnet, Haiku)와 GPT 6.x(6.1 Sol, 6.1 Terra, 6 Astra, 6 Sol, 6 Luna)를 호출합니다. 모든 요청은 **Bedrock Global CRIS**로 먼저 가고, 실패하면 모델 계열별로 자동 fallback됩니다. Claude는 **Claude Platform on AWS(1P, CPonAWS)** 로, GPT는 **Bedrock Mantle us-east-1**(리전 내 모델 ID, 별도 capacity와 quota)로 넘어갑니다.
+ap-northeast-2(서울)의 Amazon Bedrock AgentCore Gateway로 만든 LLM Gateway입니다. 클라이언트는 엔드포인트 하나로 Claude 5.5(Opus, Sonnet, Haiku)와 GPT 6.x(6.1 Sol, 6.1 Terra, 6 Astra, 6 Sol, 6 Luna)를 호출합니다.
+
+모든 요청은 Bedrock Global CRIS로 먼저 갑니다. 실패하면 모델 계열에 따라 자동으로 fallback합니다. Claude는 Claude Platform on AWS(1P, CPonAWS)로, GPT는 us-east-1의 Bedrock Mantle로 넘어갑니다. Mantle은 리전 내 모델 ID를 사용하며 용량과 quota가 따로 있습니다.
 
 <!-- TODO: 데모 이미지 또는 GIF 추가 -->
 
 ## 주요 기능
 
-- **모델 계열별 fallback** — Bedrock Global CRIS를 primary로 쓰고, 429, 5XX, 408, 403, 연결 오류, first-byte timeout이 나면 Claude는 Claude Platform on AWS로, GPT는 Bedrock Mantle us-east-1로 넘어갑니다. circuit breaker가 함께 동작합니다.
-- **엔드포인트 하나, SDK 세 종류** — `/inference`에서 Anthropic Messages, OpenAI Chat Completions와 Responses, Bedrock InvokeModel을 받습니다. 클라이언트는 Cognito JWT만 갖습니다.
-- **팀 단위 거버넌스** — 팀별 RPM, TPM, 동시 연결 한도, premium 모델과 출력 토큰 한도를 정하는 Cedar 정책, 모든 경로에 적용되는 Bedrock Guardrail을 제공합니다.
-- **라우팅 제어** — alias, interceptor 기반 `claude-auto`, 90/10 A/B 실험, 언제든 fallback을 시험하는 failover drill을 제공합니다.
-- **관측성** — vended 라우팅 로그와 trace, fallback 건수를 세는 metric filter, CloudWatch 대시보드, 알람을 제공합니다.
+- 모델 계열마다 fallback 대상이 다릅니다. 모든 모델의 primary는 Bedrock Global CRIS입니다. 429, 5XX, 408, 403, 연결 오류, first-byte timeout이 나면 fallback합니다. Claude는 Claude Platform on AWS로, GPT는 us-east-1의 Bedrock Mantle로 넘어갑니다. 실패가 이어지는 primary는 회로 차단기(circuit breaker)가 건너뜁니다.
+- 엔드포인트 `/inference` 하나에서 Anthropic Messages, OpenAI Chat Completions와 Responses, Bedrock InvokeModel을 모두 받습니다. 클라이언트에게는 Cognito JWT만 있으면 됩니다.
+- 팀마다 RPM, TPM, 동시 연결 한도가 따로 있습니다. premium 모델과 출력 토큰 한도는 Cedar 정책으로 정합니다. 모든 경로의 요청은 Bedrock Guardrail이 검사합니다.
+- 라우팅은 alias, interceptor가 프롬프트 크기로 모델을 고르는 `claude-auto`, 90/10 A/B 실험을 지원합니다. failover drill로 각 fallback 경로를 언제든 시험할 수 있습니다.
+- AgentCore가 내보내는 라우팅 로그(vended log)와 trace에 어느 대상이 응답했는지 남습니다. fallback 건수는 metric filter가 세어 CloudWatch 대시보드와 알람에 보냅니다.
 
 ## 아키텍처
 
@@ -292,11 +297,11 @@ ap-northeast-2(서울)의 Amazon Bedrock AgentCore Gateway로 만든 LLM Gateway
 
 ![LLM Gateway 요청 흐름](docs/request-flow.ko.png)
 
-같은 fallback을 시간 순서로 보면 다음과 같습니다. 회로 차단기가 닫혀 있으면 Gateway가 Bedrock을 먼저 시도하고 trigger가 생기면 다음 대상으로 넘어가며, 열려 있으면 primary를 건너뜁니다.
+아래 시퀀스는 같은 fallback을 시간 순서로 보여 줍니다. 회로 차단기가 닫혀 있으면 Gateway가 Bedrock을 먼저 시도하고 trigger가 생길 때 다음 대상으로 넘어갑니다. 차단기가 열려 있으면 primary를 건너뜁니다.
 
 ![시간 순서로 본 fallback](docs/fallback-sequence.ko.png)
 
-Mermaid로 요약한 요청 흐름입니다(위 다이어그램과 같은 구역과 색을 씁니다).
+아래 Mermaid 그림은 같은 요청 흐름을 요약합니다. 구역과 색은 위 다이어그램과 같습니다.
 
 ```mermaid
 %%{init: {"flowchart": {"wrappingWidth": 400, "subGraphTitleMargin": {"top": 4, "bottom": 16}}}}%%
@@ -340,7 +345,7 @@ flowchart LR
   linkStyle 7,8 stroke:#EC7211,stroke-width:2px
 ```
 
-자세한 내용: [docs/architecture.md](docs/architecture.md). 벡터 버전: [architecture.ko.svg](docs/architecture.ko.svg), [request-flow.ko.svg](docs/request-flow.ko.svg), [fallback-sequence.ko.svg](docs/fallback-sequence.ko.svg), [deploy-order.ko.svg](docs/deploy-order.ko.svg). 웹 페이지: [docs/architecture.html](docs/architecture.html).
+구성 요소별 설명은 [docs/architecture.md](docs/architecture.md)에 있습니다. 다이어그램의 SVG 파일은 [아키텍처](docs/architecture.ko.svg), [요청 흐름](docs/request-flow.ko.svg), [fallback 시퀀스](docs/fallback-sequence.ko.svg), [배포 순서](docs/deploy-order.ko.svg)입니다. [docs/architecture.html](docs/architecture.html)에서는 네 그림을 한 페이지로 볼 수 있습니다.
 
 | 클라이언트가 보내는 model | API | Primary | Fallback |
 |---|---|---|---|
@@ -350,7 +355,7 @@ flowchart LR
 | `gpt-6.1-sol`, `openai.gpt-6.1-sol`, `global.openai.gpt-6.1-sol` | Chat Completions, Responses | bedrock / `global.openai.gpt-6.1-sol` | mantle / `openai.gpt-6.1-sol` |
 | `gpt-6.1-terra`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna` (같은 형식) | Chat Completions, Responses | bedrock / `global.openai.<model>` | mantle / `openai.<model>` |
 | `claude-auto` | Messages | interceptor가 프롬프트 크기로 Bedrock Claude 모델 선택 | cponaws / `claude-sonnet-5-5` |
-| `claude-experiment` | Messages | 90% Sonnet / 10% Opus (`weightedRoute`) | 각 leg의 fallback |
+| `claude-experiment` | Messages | Sonnet 90%, Opus 10% (`weightedRoute`) | 각 leg의 fallback |
 | `claude-haiku-5-5-failover-drill` | Messages | first-byte timeout 50ms인 primary(항상 지연) | cponaws / `claude-haiku-5-5` |
 | `gpt-6-luna-failover-drill` | Chat Completions, Responses | first-byte timeout 50ms인 primary(항상 지연) | mantle / `openai.gpt-6-luna` |
 
@@ -361,7 +366,7 @@ flowchart LR
 | 자격증명 추상화 | 클라이언트는 Cognito JWT만 갖습니다. Gateway role이 Bedrock, Mantle, CPonAWS 프록시에 서명하고, CPonAWS 키는 프록시만 읽습니다 | `lib/constructs/cponaws-proxy.ts` |
 | 모델 라우팅과 fallback | `staticRoute.model`과 `fallback` chain을 가진 `matchModels` rule | `lib/config.ts` |
 | A/B 테스트 | `weightedRoute` 90/10 | `lib/config.ts` |
-| 팀별 쿼터 | `$.context.jwt.client_id` 기준 RPM/TPM/동시 연결, `qualifiedModelId` 기준 TPM | `lib/llm-gateway-stack.ts` |
+| 팀별 쿼터 | `$.context.jwt.client_id` 기준 RPM, TPM, 동시 연결과 `qualifiedModelId` 기준 TPM | `lib/llm-gateway-stack.ts` |
 | RBAC과 토큰 한도 | Cedar 정책. InvokeModel 경로에서는 interceptor가 premium 모델과 토큰 한도를 검사하고 미등록 모델을 거부 | `lib/policy-stack.ts`, `lambda/interceptor/index.py` |
 | 가드레일 | Bedrock Guardrail(Standard tier, APAC 프로필) | `lib/constructs/guardrail-interceptor.ts` |
 | 동적 라우팅 | interceptor의 `claude-auto` | `lambda/interceptor/index.py` |
@@ -395,14 +400,14 @@ npx cdk diff --all
 npx cdk deploy --all
 ```
 
-- CPonAWS target은 생성될 때 모델 목록을 조회하고, 키가 틀리면 실패합니다. 그래서 키 Secret은 스택이 소유하지 않는 사전 조건으로 둡니다.
-- 아직 키가 없으면 `-c enable1p=false`로 배포합니다(Claude fallback 없음).
+- CPonAWS target은 생성될 때 모델 목록을 조회하고 키가 틀리면 실패합니다. 그래서 키 Secret은 스택 밖의 사전 조건으로 둡니다.
+- 아직 키가 없으면 `-c enable1p=false`로 배포합니다. 이때 Claude에는 fallback이 없습니다.
 - `-c policyMode=LOG_ONLY`는 Cedar 결정을 기록만 하고 요청을 거부하지 않습니다.
-- `-c alarmEmail=you@example.com`은 알람에 이메일 주소를 구독합니다.
+- `-c alarmEmail=you@example.com`을 지정하면 알람이 그 주소로 메일을 보냅니다.
 
 ## 사용법
 
-팀 Secret `llm-gateway/clients/<team>`(`client_id`, `client_secret`, `token_url`)으로 access token을 받습니다. 요청 방법은 `scripts/gwlib.py`의 `token()`을 참고합니다.
+팀별 Secret `llm-gateway/clients/<team>`에 든 `client_id`, `client_secret`, `token_url`로 access token을 받습니다. 요청 방법은 `scripts/gwlib.py`의 `token()`에 있습니다.
 
 ```python
 import anthropic
@@ -426,19 +431,19 @@ br = boto3.client("bedrock-runtime", region_name="ap-northeast-2", endpoint_url=
 br.invoke_model(modelId="global.anthropic.claude-haiku-5-5", contentType="application/json", body=...)
 ```
 
-어느 쪽이 응답했는지 확인하는 방법: Claude 응답의 `id`가 `msg_bdrk_`로 시작하면 Bedrock이고, 그 밖의 `msg_` id는 CPonAWS입니다. GPT 응답의 `model`이 `global.openai.*`이면 Bedrock Global CRIS이고, `openai.*`이면 Mantle입니다.
+어느 대상이 응답했는지는 응답 값으로 알 수 있습니다. Claude 응답의 `id`가 `msg_bdrk_`로 시작하면 Bedrock이, 그 밖의 `msg_` ID면 CPonAWS가 응답했습니다. GPT 응답의 `model`이 `global.openai.*`이면 Bedrock Global CRIS, `openai.*`이면 Mantle입니다.
 
 ## 환경 설정
 
 | 변수 | 설명 | 기본값 |
 |----------|-------------|---------|
-| `AWS_PROFILE` | CDK CLI, AWS CLI, 스크립트가 쓰는 AWS 자격증명 프로필 | 기본 자격증명 체인 |
+| `AWS_PROFILE` | CDK CLI, AWS CLI, 스크립트가 사용하는 AWS 자격증명 프로필 | 기본 자격증명 체인 |
 | `LLM_GATEWAY_ENDPOINT` | 스크립트가 호출하는 inference 엔드포인트 | `cdk-outputs.json`의 `InferenceEndpoint` |
 | `ANTHROPIC_API_KEY` | `scripts/set-cponaws-key.sh`가 읽는 CPonAWS 키 | 입력 프롬프트 |
 | `ANTHROPIC_WORKSPACE_ID` | `scripts/set-cponaws-key.sh`가 SSM 파라미터 `/llm-gateway/anthropic-workspace-id`에 저장하는 서울 workspace ID | 기존 파라미터, 없으면 입력 |
 | `EVIDENCE_SINCE` | `smoke_test.py --only routing-evidence`가 라우팅 로그를 읽기 시작할 epoch 초 | 실행 시작 시각 |
 
-모델, fallback, 팀, 한도는 `lib/config.ts`에 있습니다. Workspace는 리전마다 따로 있으므로 서울 workspace ID를 써야 합니다. 이 값은 저장소에 두지 않고 SSM 파라미터에 저장하며, CloudFormation이 배포할 때 값을 채웁니다.
+모델, fallback, 팀, 한도는 `lib/config.ts`에서 정의합니다. Workspace는 리전마다 따로 있으므로 서울 workspace ID를 사용해야 합니다. 이 ID는 저장소에 두지 않고 SSM 파라미터에 저장하며 CloudFormation이 배포할 때 값을 채웁니다.
 
 ## 프로젝트 구조
 
@@ -469,7 +474,7 @@ uv run scripts/smoke_test.py --only gpt failover routing-evidence
 
 ## API 문서
 
-Gateway는 `https://<gateway-id>.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/inference` 아래에 다음 경로를 제공하며, 모두 `Authorization: Bearer <Cognito access token>`이 필요합니다.
+기준 URL은 `https://<gateway-id>.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/inference`입니다. 모든 요청에 `Authorization: Bearer <Cognito access token>` 헤더가 필요합니다.
 
 | 경로 | API | 모델 |
 |---|---|---|
@@ -482,7 +487,7 @@ Gateway는 `https://<gateway-id>.gateway.bedrock-agentcore.ap-northeast-2.amazon
 ## 기여 방법
 
 1. 브랜치를 만듭니다(`git checkout -b feat/<name>`)
-2. 모델이나 한도는 `lib/config.ts`에서 바꾸고, 문서는 같은 커밋에서 수정합니다
+2. 모델이나 한도는 `lib/config.ts`에서 바꾸고 문서도 같은 커밋에서 수정합니다
 3. `npm run build`와 `bash tests/run-all.sh`를 실행합니다. 라우팅, 정책, Lambda를 바꿨다면 배포 후 해당하는 `smoke_test.py` 검사를 실행합니다
 4. 커밋(`git commit -m 'feat: <change>'`)하고 pull request를 엽니다
 
@@ -498,26 +503,27 @@ Gateway는 `https://<gateway-id>.gateway.bedrock-agentcore.ap-northeast-2.amazon
 
 ## 검증하면서 알게 된 동작
 
-- **Rule은 interceptor가 실행되기 전, 클라이언트가 보낸 model 값으로 매칭됩니다.** 그래서 정적 alias는 rule의 `matchModels`에 두고, interceptor가 바꾼 model은 primary에 모델이 고정되지 않은 route(`claude-auto`)에서만 효과가 있습니다.
-- **Bedrock은 모델 계열마다 API 스키마가 하나입니다.** Claude는 Messages나 InvokeModel로만, GPT는 OpenAI 스키마로만 서빙됩니다. 맞지 않는 요청에는 올바른 SDK를 알려 주는 400을 반환합니다.
-- **Claude 5.5 Global CRIS는 `bedrock-runtime`에서만 제공되고**, GPT 6.x의 리전 내 ID는 Mantle us-east-1의 `/openai/v1`에서만 제공됩니다. 서울에서는 `us.` 프로필을 호출할 수 없습니다.
-- **Provider target은 생성될 때 `GET /v1/models`를 호출하고**, 자격증명이 틀리면 실패합니다. 그래서 CPonAWS 키가 배포 사전 조건입니다.
-- **CPonAWS는 모든 요청에 `anthropic-workspace-id`가 필요합니다.** Gateway target은 고정 헤더를 넣을 수 없고 생성 시점의 discovery 호출은 interceptor를 거치지 않으므로, 스트리밍 Lambda 프록시를 두었습니다.
-- **Cedar는 `context.input.<field>`를 `has` 가드 뒤에서만 읽을 수 있습니다.** 가드가 없으면 검증 단계에서 forbid가 "Overly Restrictive"로 거부됩니다. InvokeModel의 모델 ID는 URI에 있으므로, 그 경로의 premium 모델 제한과 토큰 한도는 interceptor가 맡습니다. interceptor는 ID를 URL 디코딩하고 ARN은 가리키는 모델로 줄인 뒤 검사합니다.
-- **ap-northeast-2에서는 Guardrails in Policy를 제공하지 않으므로** interceptor가 `ApplyGuardrail`을 호출합니다. `GUARDRAIL_FAIL_MODE` 기본값은 `open`이며 알람이 걸려 있습니다.
-- **서빙할 수 없는 모델 ID가 HTTP 200과 오류 본문을 돌려줄 수 있습니다**(서울에서 bare `anthropic.claude-haiku-5-5`). 이 응답은 fallback 대상이 아니므로, drill에는 first-byte timeout 50ms를 씁니다.
-- **Vended 라우팅 로그는 best effort입니다.** 20~80초 늦게 순서 없이 도착하고, 테스트 중 1건은 끝내 도착하지 않았습니다. 추세 분석에는 쓰되 건별 집계에는 쓰지 않습니다.
-- **Inference 메트릭은 `ApplicationSignals` namespace에 있습니다.** `AWS/Bedrock-AgentCore`에는 Cedar와 identity 메트릭만 있습니다.
-- **aws-cdk-lib의 `CfnGatewayRule`에는 `MatchModels`, `Model`, `Fallback`이 없어** 조용히 빠집니다. 그래서 rule은 raw `CfnResource`로 작성했고, synth 시 F3018 경고가 나옵니다.
+- Rule은 interceptor가 실행되기 전에 클라이언트가 보낸 model 값으로 매칭됩니다. 그래서 정적 alias는 rule의 `matchModels`에 둡니다. interceptor가 바꾼 model은 primary에 모델을 고정하지 않은 route(`claude-auto`)에서만 효과가 있습니다.
+- Bedrock은 모델 계열마다 API 스키마가 하나입니다. Claude는 Messages나 InvokeModel로만, GPT는 OpenAI 스키마로만 서빙됩니다. 맞지 않는 요청에는 올바른 SDK를 알려 주는 400을 반환합니다.
+- Claude 5.5 Global CRIS는 `bedrock-runtime`에서만, GPT 6.x의 리전 내 ID는 Mantle us-east-1의 `/openai/v1`에서만 제공됩니다.
+- Provider target은 생성될 때 `GET /v1/models`를 호출하고 자격증명이 틀리면 실패합니다. CPonAWS 키를 배포 전에 준비해야 하는 이유입니다.
+- CPonAWS는 모든 요청에 `anthropic-workspace-id` 헤더를 요구합니다. Gateway target은 고정 헤더를 넣을 수 없고 생성 시점의 discovery 호출은 interceptor를 거치지 않습니다. 그래서 스트리밍 Lambda 프록시가 이 헤더를 추가합니다.
+- Cedar는 `context.input.<field>`를 `has` 가드 뒤에서만 읽을 수 있습니다. 가드가 없으면 검증 단계에서 forbid가 "Overly Restrictive"로 거부됩니다.
+- InvokeModel은 모델 ID를 URI에 담으므로 Cedar가 볼 수 없습니다. 이 경로의 premium 모델 제한과 토큰 한도는 interceptor가 맡습니다. interceptor는 ID를 URL 디코딩하고 ARN은 가리키는 모델로 줄인 뒤 검사합니다.
+- ap-northeast-2에서는 Guardrails in Policy를 제공하지 않으므로 interceptor가 `ApplyGuardrail`을 호출합니다. `GUARDRAIL_FAIL_MODE` 기본값은 `open`이며 알람이 걸려 있습니다.
+- 서빙할 수 없는 모델 ID가 HTTP 200과 오류 본문을 돌려줄 수 있습니다(서울에서 접두어 없는 `anthropic.claude-haiku-5-5`). 이 응답은 fallback 대상이 아니므로 drill에는 first-byte timeout 50ms를 사용합니다.
+- Vended 라우팅 로그는 전달을 보장하지 않습니다(best effort). 20~80초 늦게 순서 없이 도착하며 테스트 중 1건은 끝내 도착하지 않았습니다. 추세 분석에는 사용하되 건별 집계에는 사용하지 않습니다.
+- Inference 메트릭은 `ApplicationSignals` namespace에 있습니다. `AWS/Bedrock-AgentCore`에는 Cedar와 identity 메트릭만 있습니다.
+- aws-cdk-lib의 `CfnGatewayRule`에는 `MatchModels`, `Model`, `Fallback`이 없어서 이 속성이 조용히 빠집니다. rule을 raw `CfnResource`로 작성한 이유이며, synth 때 F3018 경고가 나옵니다.
 
 ## 운영 시 주의
 
-- **First-byte timeout**: Opus와 GPT는 180초, Sonnet과 GPT 6 Luna는 120초, Haiku는 60초입니다. 비스트리밍 응답은 생성이 끝나야 첫 바이트가 나가므로, 클라이언트가 스트리밍을 쓰면 지연을 더 빨리 감지합니다.
-- **스트림이 시작된 뒤에는 fallback하지 않습니다**: 첫 바이트 이후에 실패하면 클라이언트가 다시 요청해야 합니다.
-- **Fallback 시도마다 gateway invocation으로 과금됩니다**: circuit breaker가 열리면 장애 중인 primary를 건너뜁니다.
-- **데이터 위치**: GPT fallback 동안에는 데이터가 us-east-1로 갑니다.
-- **Rate limit은 token bucket입니다**: 순간적으로 분당 한도를 넘는 요청이 통과할 수 있습니다.
-- **matchPrincipals 조건은 IAM principal만 매칭합니다**: JWT 기반인 이 gateway에서는 쓰지 않습니다.
+- First-byte timeout은 Opus와 GPT가 180초, Sonnet과 GPT 6 Luna가 120초, Haiku가 60초입니다. 비스트리밍 응답은 생성이 끝나야 첫 바이트가 나가므로 클라이언트가 스트리밍을 사용하면 지연을 더 빨리 감지합니다.
+- 스트림이 시작된 뒤에는 fallback하지 않습니다. 첫 바이트 이후에 실패하면 클라이언트가 다시 요청해야 합니다.
+- Fallback 시도마다 gateway 호출(invocation)로 과금됩니다. 회로 차단기가 열리면 장애 중인 primary를 건너뜁니다.
+- GPT가 fallback하는 동안에는 데이터가 us-east-1로 갑니다.
+- Rate limit은 token bucket 방식이라 순간적으로 분당 한도를 넘는 요청이 통과할 수 있습니다.
+- `matchPrincipals` 조건은 IAM principal만 매칭하므로 JWT 기반인 이 gateway에서는 사용하지 않습니다.
 
 ## 정리
 
