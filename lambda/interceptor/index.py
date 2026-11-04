@@ -14,13 +14,13 @@ Responsibilities
 3. Guard rails the gateway cannot express:
    - OpenAI-dialect requests for Claude get a clear 400 (Bedrock serves Claude
      only in the Anthropic Messages / InvokeModel schema).
-   - InvokeModel paths (`/model/{modelId}/invoke[-with-response-stream]`):
-     premium-only models and the standard output-token cap. The model ID is in
-     the URI, where Cedar `context.input` cannot see it, and no Cedar policy
-     covers these actions, so this check is the only control and fails closed:
-     the ID is URL-decoded and an ARN is reduced to the model it names, any
-     other `/model/` operation is refused, and so is a model the gateway does
-     not declare (on every dialect).
+   - InvokeModel paths (`/model/{modelId}/invoke[-with-response-stream]`) are
+     for callers with the premium scope only. The gateway's token rate limits
+     count only Messages, Chat Completions and Responses, and Cedar cannot see a
+     model ID in the URI, so nothing else would cap these requests. The check
+     fails closed: the ID is URL-decoded and an ARN is reduced to the model it
+     names, any other `/model/` operation is refused, and so is a model the
+     gateway does not declare (on every dialect).
 4. Per-team usage metrics — CloudWatch Embedded Metric Format (EMF) records.
 
 Inference targets use the `http` interceptor payload: the body is a base64 string.
@@ -46,12 +46,10 @@ GUARDRAIL_MAX_CHARS = int(os.environ.get("GUARDRAIL_MAX_CHARS", "20000"))
 METRICS_NAMESPACE = os.environ.get("METRICS_NAMESPACE", "LlmGateway")
 CANONICAL = json.loads(os.environ.get("CANONICAL_MODELS", "{}"))
 FAMILIES = json.loads(os.environ.get("MODEL_FAMILIES", "{}"))
-PREMIUM_MODELS = set(json.loads(os.environ.get("PREMIUM_MODELS", "[]")))
 AUTO_ALIAS = os.environ.get("AUTO_MODEL_ALIAS", "claude-auto")
 AUTO_MODELS = json.loads(os.environ.get("AUTO_MODELS", "{}"))
 TEAM_CLIENTS = json.loads(os.environ.get("TEAM_CLIENTS", "{}"))
 PREMIUM_SCOPE = os.environ.get("PREMIUM_SCOPE", "llm-gateway/premium")
-MAX_OUTPUT_TOKENS = int(os.environ.get("MAX_OUTPUT_TOKENS", "16384"))
 INVOKE_OPERATIONS = ("invoke", "invoke-with-response-stream")
 TOKEN_FIELDS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
 
@@ -152,15 +150,6 @@ def _path_model(path: str):
     else:
         return None  # still changing after three passes
     return model_id.rsplit("/", 1)[-1] if model_id.startswith("arn:") else model_id
-
-
-def _over_cap(value) -> bool:
-    """True when an output-token field exceeds the standard cap or is not a plain number."""
-    if value is None:
-        return False
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return True
-    return value > MAX_OUTPUT_TOKENS
 
 
 def _parse_body(encoded):
@@ -335,11 +324,10 @@ def lambda_handler(event, context):
                   "GPT models are served through the OpenAI APIs on this gateway "
                   "(POST /inference/v1/chat/completions or /inference/v1/responses, e.g. the OpenAI SDK) "
                   "or Bedrock InvokeModel with a Chat Completions body.")
-    elif dialect == "bedrock" and model in PREMIUM_MODELS and not premium:
-        denial = (403, "premium_required", f"{model} requires the {PREMIUM_SCOPE} scope.")
-    elif dialect == "bedrock" and not premium and any(_over_cap(fields.get(f)) for f in TOKEN_FIELDS):
-        denial = (403, "max_tokens_exceeded",
-                  f"Output tokens above {MAX_OUTPUT_TOKENS} require the {PREMIUM_SCOPE} scope.")
+    elif dialect == "bedrock" and not premium:
+        denial = (403, "premium_required",
+                  f"InvokeModel requires the {PREMIUM_SCOPE} scope: the gateway's token rate limits do not "
+                  "count InvokeModel traffic. Use the Anthropic Messages or OpenAI APIs on /inference instead.")
     if denial:
         _emit(team, model, dialect, False, 0.0, False, {**log_fields, "denied": denial[1]})
         return _deny(dialect, *denial)

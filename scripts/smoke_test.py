@@ -14,9 +14,11 @@ import argparse
 import collections
 import json
 import os
+import re
 import sys
 import time
 import traceback
+import urllib.parse
 
 import anthropic
 import boto3
@@ -132,7 +134,8 @@ def t_openai():
 @check("bedrock-sdk")
 def t_bedrock_sdk():
     # boto3 sends AWS_BEARER_TOKEN_BEDROCK as "Authorization: Bearer ..." instead of SigV4.
-    os.environ["AWS_BEARER_TOKEN_BEDROCK"] = gwlib.token("team-standard")
+    # InvokeModel is premium-only: the gateway's token rate limits do not count it.
+    os.environ["AWS_BEARER_TOKEN_BEDROCK"] = gwlib.token("team-premium")
     br = boto3.client("bedrock-runtime", region_name=gwlib.REGION, endpoint_url=gwlib.endpoint())
     body = {"anthropic_version": "bedrock-2023-05-31", "max_tokens": 16,
             "messages": [{"role": "user", "content": "Reply with exactly: pong"}]}
@@ -184,7 +187,8 @@ def t_policy():
         record("policy: premium→opus ARN allowed", resp.model.endswith(OPUS) or OPUS in resp.model, f"model={resp.model}")
     except anthropic.APIStatusError as e:
         record("policy: premium→opus ARN allowed", False, f"{e.status_code} {str(e.body)[:120]}")
-    # InvokeModel: the model is in the URI, so the interceptor enforces premium-only models.
+    # InvokeModel: token rate limits do not count it and Cedar cannot see the model in the URI,
+    # so the interceptor allows it for the premium scope only.
     os.environ["AWS_BEARER_TOKEN_BEDROCK"] = gwlib.token("team-standard")
     try:
         br = boto3.client("bedrock-runtime", region_name=gwlib.REGION, endpoint_url=gwlib.endpoint())
@@ -194,8 +198,9 @@ def t_policy():
     except br.exceptions.AccessDeniedException as e:
         record("policy: standard→opus InvokeModel denied", True, str(e)[:120])
     # The interceptor is the only control on InvokeModel, so it must fail closed on every
-    # other spelling of a premium model, on the token cap, and on unknown models or operations.
+    # spelling of a model, and on unknown models or operations.
     invoke_cases = [
+        ("haiku (premium scope only)", f"global.anthropic.{HAIKU}", 8, 403),
         ("opus inference-profile ARN", f"arn:aws:bedrock:{gwlib.REGION}:{account}:inference-profile/global.anthropic.{OPUS}", 8, 403),
         ("claude-experiment alias", "claude-experiment", 8, 403),
         ("haiku max_tokens above the cap", f"global.anthropic.{HAIKU}", 32000, 403),
@@ -217,6 +222,17 @@ def t_policy():
     except botocore.exceptions.ClientError as e:
         got = e.response["ResponseMetadata"]["HTTPStatusCode"]
         record("policy: Converse refused", got == 400, f"{got} {str(e)[:100]}")
+    os.environ["AWS_BEARER_TOKEN_BEDROCK"] = gwlib.token("team-premium")
+    try:
+        pr = boto3.client("bedrock-runtime", region_name=gwlib.REGION, endpoint_url=gwlib.endpoint())
+        out = json.loads(pr.invoke_model(
+            modelId=f"arn:aws:bedrock:{gwlib.REGION}:{account}:inference-profile/global.anthropic.{OPUS}",
+            contentType="application/json", body=json.dumps(
+                {"anthropic_version": "bedrock-2023-05-31", "max_tokens": 8,
+                 "messages": [{"role": "user", "content": "hi"}]}))["body"].read())
+        record("policy: premium InvokeModel opus ARN allowed", out.get("model") == OPUS, f"model={out.get('model')}")
+    except botocore.exceptions.ClientError as e:
+        record("policy: premium InvokeModel opus ARN allowed", False, str(e)[:120])
     finally:
         os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
 
@@ -346,6 +362,40 @@ def t_gpt():
     record("gpt failover drill (response)", bool(text), f"model={r.model} {time.time() - t0:.1f}s text={text[:30]!r}")
 
 
+@check("quota-headroom")
+def t_quota_headroom():
+    # Per-model gateway TPM must stay at or below 80% of the account's Global cross-Region TPM
+    # quota, so the gateway throttles before Bedrock answers 429 (which would trigger a fallback).
+    headroom = 0.8
+    gateway_id = urllib.parse.urlparse(gwlib.endpoint()).hostname.split(".")[0]
+    ctl = boto3.client("bedrock-agentcore-control", region_name=gwlib.REGION)
+    entries = ctl.get_gateway_rate_limit(gatewayIdentifier=gateway_id, rateLimitId="per-model")["entries"]
+    quotas = {}
+    for page in boto3.client("service-quotas", region_name=gwlib.REGION).get_paginator(
+            "list_service_quotas").paginate(ServiceCode="bedrock"):
+        quotas.update({q["QuotaName"]: q["Value"] for q in page["Quotas"]})
+
+    def quota_name(model_id):
+        m = re.fullmatch(r"global\.anthropic\.claude-([a-z]+)-(\d+)-(\d+)", model_id)
+        if m:
+            return f"Anthropic Claude {m[1].title()} {m[2]}.{m[3]}"
+        m = re.fullmatch(r"global\.openai\.gpt-([\d.]+)-([a-z]+)", model_id)
+        return f"GPT-{m[1]} {m[2].title()}" if m else None
+
+    for entry in entries:
+        model_id = entry["dimensions"]["qualifiedModelId"]
+        name = quota_name(model_id)
+        if not name:
+            continue  # fallback IDs and the "*" default: no Global CRIS quota
+        tpm = entry["tokens"][0]["rate"]
+        quota = quotas.get(f"Global cross-region model inference tokens per minute for {name}")
+        if quota is None:
+            record(f"quota-headroom {model_id}", False, "no matching Service Quotas entry")
+            continue
+        record(f"quota-headroom {model_id}", tpm <= headroom * quota,
+               f"gateway {tpm:,.0f} / quota {quota:,.0f} TPM ({tpm / quota:.0%}, limit {headroom:.0%})")
+
+
 @check("routing-evidence")
 def t_routing_evidence():
     """Which target actually served each request, from the gateway's vended routing logs."""
@@ -385,7 +435,7 @@ def t_routing_evidence():
 
 RAN: set = set()
 CHECKS = [t_models, t_route_3p, t_streaming, t_alias, t_openai, t_bedrock_sdk, t_guardrail, t_policy, t_failover,
-          t_experiment, t_gpt, t_rate_limit, t_routing_evidence]
+          t_experiment, t_gpt, t_rate_limit, t_quota_headroom, t_routing_evidence]
 
 
 def main():
@@ -393,6 +443,9 @@ def main():
     parser.add_argument("--only", nargs="*", help="check names to run")
     parser.add_argument("--skip", nargs="*", default=[], help="check names to skip")
     args = parser.parse_args()
+    unknown = set(args.only or []) - {fn.check_name for fn in CHECKS}
+    if unknown:
+        parser.error(f"unknown check(s): {', '.join(sorted(unknown))}")
     print(f"endpoint: {gwlib.endpoint()}\n")
     for fn in CHECKS:
         if (args.only and fn.check_name not in args.only) or fn.check_name in args.skip:

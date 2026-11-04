@@ -13,7 +13,6 @@ import {
   GUARDRAIL_FAIL_MODE,
   GUARDRAIL_MAX_CHARS,
   LOG_RETENTION_DAYS,
-  MAX_OUTPUT_TOKENS_STANDARD,
   MODELS,
   modelByKey,
 } from '../config';
@@ -104,8 +103,6 @@ export class GuardrailInterceptor extends Construct {
     // Rule-only aliases are models too: the interceptor refuses any model missing from MODEL_FAMILIES.
     for (const d of FAILOVER_DRILLS) family[d.alias] = modelByKey(d.modelKey).family;
     family[EXPERIMENT.alias] = modelByKey(EXPERIMENT.legs[0].modelKey).family;
-    const premiumModels = MODELS.filter((m) => m.premiumOnly).map((m) => m.canonical);
-    if (EXPERIMENT.legs.some((l) => modelByKey(l.modelKey).premiumOnly)) premiumModels.push(EXPERIMENT.alias);
     const bedrockId = (key: string) => modelByKey(key).bedrockModel;
 
     const logGroup = new logs.LogGroup(this, 'LogGroup', {
@@ -132,9 +129,6 @@ export class GuardrailInterceptor extends Construct {
         METRICS_NAMESPACE: props.metricsNamespace,
         CANONICAL_MODELS: JSON.stringify(canonical),
         MODEL_FAMILIES: JSON.stringify(family),
-        PREMIUM_MODELS: JSON.stringify(premiumModels),
-        // Cedar caps output tokens on Messages, Chat Completions and Responses; InvokeModel is capped here.
-        MAX_OUTPUT_TOKENS: String(MAX_OUTPUT_TOKENS_STANDARD),
         AUTO_MODEL_ALIAS: AUTO_ROUTE.alias,
         // claude-auto resolves to Bedrock IDs: the auto rule's primary serves the rewritten model.
         AUTO_MODELS: JSON.stringify({ small: bedrockId('haiku'), medium: bedrockId('sonnet'), large: bedrockId('opus') }),

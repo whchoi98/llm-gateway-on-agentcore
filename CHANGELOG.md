@@ -28,7 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add live smoke tests and English and Korean diagrams: architecture, request flow, fallback sequence, and deploy order
 
 ### Security
-- The interceptor fails closed on InvokeModel paths, where Cedar cannot see the model: it URL-decodes the model ID, reduces an inference-profile ARN to the model it names, enforces premium models (including `claude-experiment`) and the output-token cap, and refuses undeclared models and any `/model/` operation other than invoke
+- InvokeModel is limited to the premium scope: gateway token rate limits do not count it and Cedar cannot see its model ID. The interceptor fails closed on these paths: it URL-decodes the model ID, reduces an inference-profile ARN to the model it names, and refuses undeclared models and any `/model/` operation other than invoke
+- Per-model TPM limits drop to at most 80% of the account's Global cross-Region TPM quotas (Sonnet, GPT 6.1 Sol, 6.1 Terra, 6 Astra, 6 Sol, 6 Luna), and the `quota-headroom` smoke check compares them with the live quotas
 - The Claude Platform on AWS workspace ID moved out of the repository into the SSM parameter `/llm-gateway/anthropic-workspace-id`, which `scripts/set-cponaws-key.sh` writes and CloudFormation resolves at deploy time
 
 ---
@@ -56,5 +57,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 실환경 smoke test와 영문, 한국어 다이어그램(아키텍처, 요청 흐름, fallback 시퀀스, 배포 순서) 추가
 
 ### Security
-- Cedar가 model을 볼 수 없는 InvokeModel 경로에서 interceptor가 fail-closed로 동작합니다. model ID를 URL 디코딩하고 inference-profile ARN은 가리키는 모델로 줄인 뒤, premium 모델(`claude-experiment` 포함)과 출력 토큰 한도를 검사하며, 미등록 모델과 invoke 외의 `/model/` 경로는 거부합니다.
+- InvokeModel을 premium scope에만 허용합니다. gateway token rate limit에 집계되지 않고 Cedar가 model ID를 볼 수 없기 때문입니다. 이 경로에서 interceptor는 fail-closed로 동작합니다. model ID를 URL 디코딩하고 inference-profile ARN은 가리키는 모델로 줄이며, 미등록 모델과 invoke 외의 `/model/` 경로는 거부합니다.
+- 모델별 TPM 한도를 이 계정 Global cross-Region TPM quota의 80% 이하로 낮췄습니다(Sonnet, GPT 6.1 Sol, 6.1 Terra, 6 Astra, 6 Sol, 6 Luna). `quota-headroom` smoke 검사가 현재 quota와 비교합니다.
 - Claude Platform on AWS workspace ID를 저장소에서 빼서 SSM 파라미터 `/llm-gateway/anthropic-workspace-id`로 옮겼습니다. `scripts/set-cponaws-key.sh`가 이 파라미터를 쓰고, CloudFormation이 배포할 때 값을 채웁니다.

@@ -70,7 +70,14 @@ export interface ModelRoute {
   readonly priority: number;
   /** Requires the `premium` OAuth scope (enforced by Cedar policy). */
   readonly premiumOnly: boolean;
-  /** Gateway-wide TPM ceiling per served model (shared provider quota). */
+  /**
+   * Gateway-wide TPM ceiling per served model, applied to the primary and the
+   * fallback model ID. Keep it at or below 80% of the account's Global
+   * cross-Region TPM quota for the primary, so the gateway throttles before
+   * Bedrock returns 429 (which would trigger a fallback instead). Quotas are
+   * per account and adjustable: `uv run scripts/smoke_test.py --only quota-headroom`
+   * compares the deployed values with the live quotas.
+   */
   readonly tpm: number;
   /**
    * Extra model names that share this route (and its fallback chain).
@@ -109,15 +116,18 @@ const gpt = (canonical: string, o: RouteOptions): ModelRoute => ({
 });
 
 export const MODELS: ModelRoute[] = [
+  // tpm vs. Global cross-Region TPM quota in ap-northeast-2 (2026-11-04): Opus 4M of 30M and
+  // Haiku 8M of 10M (cost-capped below 80%); Sonnet 4.8M of 6M; GPT 6.1 Sol and 6 Sol 1.6M of 2M;
+  // GPT 6.1 Terra, 6 Astra and 6 Luna 3.2M of 4M.
   claude('claude-opus-5-5', { key: 'opus', primaryFirstByteTimeoutMs: 180_000, priority: 100, tpm: 4_000_000, premiumOnly: true, aliases: ['opus', 'claude-opus'] }),
-  claude('claude-sonnet-5-5', { key: 'sonnet', primaryFirstByteTimeoutMs: 120_000, priority: 110, tpm: 8_000_000, aliases: ['sonnet', 'claude-sonnet'] }),
+  claude('claude-sonnet-5-5', { key: 'sonnet', primaryFirstByteTimeoutMs: 120_000, priority: 110, tpm: 4_800_000, aliases: ['sonnet', 'claude-sonnet'] }),
   claude('claude-haiku-5-5', { key: 'haiku', primaryFirstByteTimeoutMs: 60_000, priority: 120, tpm: 8_000_000, aliases: ['haiku', 'claude-haiku'] }),
   // GPT 6.x are reasoning models: long non-streaming completions are normal.
-  gpt('gpt-6.1-sol', { key: 'gpt-6-1-sol', primaryFirstByteTimeoutMs: 180_000, priority: 200, tpm: 4_000_000 }),
-  gpt('gpt-6.1-terra', { key: 'gpt-6-1-terra', primaryFirstByteTimeoutMs: 180_000, priority: 210, tpm: 4_000_000 }),
-  gpt('gpt-6-astra', { key: 'gpt-6-astra', primaryFirstByteTimeoutMs: 180_000, priority: 220, tpm: 4_000_000 }),
-  gpt('gpt-6-sol', { key: 'gpt-6-sol', primaryFirstByteTimeoutMs: 180_000, priority: 230, tpm: 4_000_000 }),
-  gpt('gpt-6-luna', { key: 'gpt-6-luna', primaryFirstByteTimeoutMs: 120_000, priority: 240, tpm: 8_000_000 }),
+  gpt('gpt-6.1-sol', { key: 'gpt-6-1-sol', primaryFirstByteTimeoutMs: 180_000, priority: 200, tpm: 1_600_000 }),
+  gpt('gpt-6.1-terra', { key: 'gpt-6-1-terra', primaryFirstByteTimeoutMs: 180_000, priority: 210, tpm: 3_200_000 }),
+  gpt('gpt-6-astra', { key: 'gpt-6-astra', primaryFirstByteTimeoutMs: 180_000, priority: 220, tpm: 3_200_000 }),
+  gpt('gpt-6-sol', { key: 'gpt-6-sol', primaryFirstByteTimeoutMs: 180_000, priority: 230, tpm: 1_600_000 }),
+  gpt('gpt-6-luna', { key: 'gpt-6-luna', primaryFirstByteTimeoutMs: 120_000, priority: 240, tpm: 3_200_000 }),
 ];
 export const modelByKey = (key: string) => {
   const m = MODELS.find((x) => x.key === key);
