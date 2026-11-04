@@ -204,7 +204,7 @@ def architecture():
         node(232, 584, 240, 56, "CloudWatch / X-Ray", [T("routing logs, alarms", "라우팅 로그, 알람")], I_CLOUDWATCH),
         node(664, 248, 240, 80, "Amazon Bedrock", ["Global CRIS, global.*", "Claude 5.5, GPT 6.x"], I_BEDROCK),
         node(664, 400, 240, 80, T("CPonAWS proxy", "CPonAWS 프록시"),
-             ["Lambda Function URL (IAM)", T("+workspace, key from SM", "workspace 헤더, 키 (SM)")], I_LAMBDA),
+             ["Lambda Function URL (IAM)", T("workspace (SSM), key (SM)", "workspace(SSM), 키(SM)")], I_LAMBDA),
         node(992, 400, 240, 80, "Claude Platform on AWS", ["aws-external-anthropic", "claude-*-5-5 (1P)"], kind="external"),
         node(992, 600, 240, 80, "Bedrock Mantle", ["bedrock-mantle /openai/v1", T("openai.gpt-6* (in-Region)", "openai.gpt-6* (리전 내)")], I_BEDROCK),
     ]
@@ -411,8 +411,8 @@ def deploy():
                f'<text x="{dx}" y="{dy - 4}" fill="{INK}" font-size="{NAME_PX}" font-weight="600" font-family="{SANS}" text-anchor="middle">{T("CPonAWS key", "CPonAWS 키가")}</text>\n'
                f'<text x="{dx}" y="{dy + 12}" fill="{INK}" font-size="{NAME_PX}" font-weight="600" font-family="{SANS}" text-anchor="middle">{T("ready?", "있나요?")}</text>')
     nodes = [
-        node(200, 128, 248, 96, T("Store the 1P key", "1P 키 저장"),
-             ["scripts/set-cponaws-key.sh", T("checks GET /v1/models", "GET /v1/models로 먼저 검증"), "→ Secrets Manager"], I_SECRETS, step=1),
+        node(200, 128, 248, 96, T("Store key, workspace ID", "1P 키, workspace 저장"),
+             ["scripts/set-cponaws-key.sh", T("checks GET /v1/models", "GET /v1/models로 먼저 검증"), "→ Secrets Manager, SSM"], I_SECRETS, step=1),
         node(464, 128, 248, 96, T("Deploy the core stack", "Core 스택 배포"),
              ["LlmGatewayStack", T("each target lists models", "target 생성 시 모델 조회"), T("on create: key must work", "→ 키가 미리 유효해야 함")], I_CFN, step=2),
         node(728, 128, 248, 96, T("Deploy the policy stack", "정책 스택 배포"),
@@ -431,8 +431,8 @@ def deploy():
         ("line", T("ON FAILURE", "실패 시"), MUTED, True),
     ], P)
     title = T("Deploy order", "배포 순서")
-    desc = T("Store and verify the CPonAWS key first, then deploy the core stack, whose targets check the key when they are created, then the Cedar policy stack, then run the smoke test. Without a key, deploy both stacks with enable1p=false.",
-             "CPonAWS 키를 먼저 검증해 저장하고, target 생성 때 키를 확인하는 Core 스택, Cedar 정책 스택 순서로 배포한 뒤 스모크 테스트를 실행합니다. 키가 없으면 enable1p=false로 두 스택을 배포합니다.")
+    desc = T("Store and verify the CPonAWS key and workspace ID first, then deploy the core stack, whose targets check the key when they are created, then the Cedar policy stack, then run the smoke test. Without a key, deploy both stacks with enable1p=false.",
+             "CPonAWS 키와 workspace ID를 먼저 검증해 저장하고, target 생성 때 키를 확인하는 Core 스택, Cedar 정책 스택 순서로 배포한 뒤 스모크 테스트를 실행합니다. 키가 없으면 enable1p=false로 두 스택을 배포합니다.")
     return f'''<svg viewBox="0 48 {W} {H - 48}" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="{P}-title {P}-desc">
 <title id="{P}-title">{esc(title)}</title>
 <desc id="{P}-desc">{esc(desc)}</desc>
@@ -465,7 +465,7 @@ COPY = {
         h2d="4. Deploy order",
         capd="npx cdk deploy --all runs steps 2 and 3 in order; review npx cdk diff --all first. To add the Claude fallback later, run step 1 and deploy again.",
         cards=[("Claude 5.5", "accent", "Bedrock → Claude Platform on AWS",
-                ["API: Anthropic Messages, Bedrock InvokeModel", "Primary <code>global.anthropic.claude-*-5-5</code>",
+                ["API: Anthropic Messages, Bedrock InvokeModel (premium scope)", "Primary <code>global.anthropic.claude-*-5-5</code>",
                  "Fallback <code>cponaws</code> (the proxy λ adds the workspace header)", "Tell: an <code>id</code> starting with <code>msg_bdrk_</code> is 3P"]),
                ("GPT 6.x", "accent", "Bedrock → Mantle us-east-1",
                 ["API: Chat Completions, Responses", "Primary <code>global.openai.gpt-6*</code>",
@@ -488,7 +488,7 @@ COPY = {
         h2d="④ 배포 순서",
         capd="npx cdk deploy --all이 2, 3단계를 순서대로 실행합니다. 배포 전에 npx cdk diff --all로 변경 사항을 확인하세요. Claude fallback을 나중에 추가하려면 1단계를 실행한 뒤 다시 배포합니다.",
         cards=[("Claude 5.5", "accent", "Bedrock → Claude Platform on AWS",
-                ["API: Anthropic Messages, Bedrock InvokeModel", "Primary <code>global.anthropic.claude-*-5-5</code>",
+                ["API: Anthropic Messages, Bedrock InvokeModel(premium scope)", "Primary <code>global.anthropic.claude-*-5-5</code>",
                  "Fallback <code>cponaws</code> (proxy λ가 workspace 헤더 추가)", "판별: <code>id</code>가 <code>msg_bdrk_</code>이면 3P"]),
                ("GPT 6.x", "accent", "Bedrock → Mantle us-east-1",
                 ["API: Chat Completions, Responses", "Primary <code>global.openai.gpt-6*</code>",

@@ -28,7 +28,7 @@ Rendered diagrams: [architecture.en.png](architecture.en.png), [request-flow.en.
 - **lib/llm-gateway-stack.ts** -- AgentCore Gateway with the CUSTOM_JWT authorizer, per-team and per-model rate limits, and routing rules that pin each model to a primary and a fallback destination.
 
 ### Processing Layer
-- **lambda/interceptor/** -- REQUEST interceptor: `claude-auto` routing, guardrail, API-dialect checks, the premium and token-cap checks on InvokeModel paths (which Cedar cannot see), refusal of undeclared models, per-team EMF metrics.
+- **lambda/interceptor/** -- REQUEST interceptor: `claude-auto` routing, guardrail, API-dialect checks, InvokeModel limited to the premium scope (token rate limits do not count it and Cedar cannot see its model), refusal of undeclared models, per-team EMF metrics.
 - **lambda/cponaws-proxy/** -- Lambda Function URL (AWS_IAM, response streaming) that adds the `anthropic-workspace-id` header and the API key before calling Claude Platform on AWS.
 
 ### AI/ML Layer
@@ -189,7 +189,7 @@ Rendered: [deploy-order.en.png](deploy-order.en.png).
 %%{init: {"flowchart": {"wrappingWidth": 400}}}%%
 flowchart LR
   D{"CPonAWS key ready?"}
-  S1["1: Store the 1P key<br/>scripts/set-cponaws-key.sh<br/>checks GET /v1/models"]
+  S1["1: Store the 1P key and workspace ID<br/>scripts/set-cponaws-key.sh<br/>checks GET /v1/models, stores in Secrets Manager and SSM"]
   S2["2: Deploy the core stack<br/>LlmGatewayStack<br/>targets list models on create"]
   S3["3: Deploy the policy stack<br/>LlmGatewayPolicyStack<br/>Cedar permit, forbid rules"]
   S4(["4: Smoke test<br/>uv run scripts/smoke_test.py"])
@@ -264,7 +264,7 @@ Anthropic Messages, OpenAI Chat Completions와 Responses, Bedrock InvokeModel AP
 - **lib/llm-gateway-stack.ts** -- CUSTOM_JWT authorizer, 팀별, 모델별 요청 한도, 모델마다 primary와 fallback 목적지를 고정하는 라우팅 rule을 갖춘 AgentCore Gateway입니다.
 
 ### Processing Layer
-- **lambda/interceptor/** -- REQUEST interceptor입니다. `claude-auto` 라우팅, 가드레일, API dialect 검사, Cedar가 볼 수 없는 InvokeModel 경로의 premium과 토큰 한도 검사, 미등록 모델 거부, 팀별 EMF 메트릭을 맡습니다.
+- **lambda/interceptor/** -- REQUEST interceptor입니다. `claude-auto` 라우팅, 가드레일, API dialect 검사, InvokeModel을 premium scope에만 허용(token rate limit에 집계되지 않고 Cedar가 모델을 볼 수 없음), 미등록 모델 거부, 팀별 EMF 메트릭을 맡습니다.
 - **lambda/cponaws-proxy/** -- Lambda Function URL(AWS_IAM, 응답 스트리밍)입니다. `anthropic-workspace-id` 헤더와 API 키를 붙여 Claude Platform on AWS를 호출합니다.
 
 ### AI/ML Layer
@@ -425,7 +425,7 @@ sequenceDiagram
 %%{init: {"flowchart": {"wrappingWidth": 400}}}%%
 flowchart LR
   D{"CPonAWS key ready?"}
-  S1["1: Store the 1P key<br/>scripts/set-cponaws-key.sh<br/>checks GET /v1/models"]
+  S1["1: Store the 1P key and workspace ID<br/>scripts/set-cponaws-key.sh<br/>checks GET /v1/models, stores in Secrets Manager and SSM"]
   S2["2: Deploy the core stack<br/>LlmGatewayStack<br/>targets list models on create"]
   S3["3: Deploy the policy stack<br/>LlmGatewayPolicyStack<br/>Cedar permit, forbid rules"]
   S4(["4: Smoke test<br/>uv run scripts/smoke_test.py"])
