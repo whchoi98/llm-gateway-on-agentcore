@@ -6,9 +6,16 @@ import pathlib
 import re
 import shutil
 
-SKILL = pathlib.Path(os.environ.get(
-    "AWS_DIAGRAM_SKILL",
-    pathlib.Path.home() / ".claude/plugins/cache/my-plugins/my-plugins/1.0.0/skills/aws-diagram-design"))
+def _installed_skill() -> pathlib.Path:
+    """Highest installed my-plugins version (numeric order: 1.10.0 > 1.9.0)."""
+    root = pathlib.Path.home() / ".claude/plugins/cache/my-plugins/my-plugins"
+    found = [p for p in root.glob("*/skills/aws-diagram-design") if p.is_dir()]
+    if not found:
+        raise SystemExit(f"aws-diagram-design not found under {root}; set AWS_DIAGRAM_SKILL")
+    return max(found, key=lambda p: tuple(int(n) if n.isdigit() else -1 for n in p.parts[-3].split(".")))
+
+
+SKILL = pathlib.Path(os.environ["AWS_DIAGRAM_SKILL"]) if os.environ.get("AWS_DIAGRAM_SKILL") else _installed_skill()
 ICONS = SKILL / "assets/aws-icons"
 OUT_DIR = pathlib.Path(__file__).resolve().parents[2] / "docs"
 
@@ -598,4 +605,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if sys.argv[1:] == ["--print-skill"]:
+        print(SKILL)  # used by export.sh to find the skill's checkers
+    else:
+        main()

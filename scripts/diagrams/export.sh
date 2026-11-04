@@ -12,7 +12,7 @@ export PYTHONDONTWRITEBYTECODE=1
 
 here="$(cd "$(dirname "$0")" && pwd)"
 docs="$(cd "$here/../../docs" && pwd)"
-skill="${AWS_DIAGRAM_SKILL:-$HOME/.claude/plugins/cache/my-plugins/my-plugins/1.0.0/skills/aws-diagram-design}"
+skill="$(python3 "$here/build.py" --print-skill)"  # AWS_DIAGRAM_SKILL, else the newest installed version
 
 python3 "$here/build.py"
 python3 "$here/export_svg.py" "$docs/architecture.en.html" en
