@@ -172,6 +172,34 @@ br.invoke_model(modelId="global.anthropic.claude-haiku-5-5", contentType="applic
 
 The response shows which destination served it. A Claude `id` that starts with `msg_bdrk_` came from Bedrock, and any other `msg_` ID from CPonAWS. A GPT `model` of `global.openai.*` came from Bedrock Global CRIS, and `openai.*` from Mantle.
 
+### Claude Code
+
+Claude Code connects through `ANTHROPIC_BASE_URL` and a bearer token. Put the gateway settings in `~/.claude/settings.json` or a project's `.claude/settings.json`:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://<gateway-id>.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/inference",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5-5",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-5-5",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16384"
+  }
+}
+```
+
+Then start Claude Code with a fresh token:
+
+```bash
+ANTHROPIC_AUTH_TOKEN="$(uv run --quiet scripts/gateway_token.py team-standard)" claude
+```
+
+- Pass the token in `ANTHROPIC_AUTH_TOKEN`, not `apiKeyHelper` or `ANTHROPIC_API_KEY`. `apiKeyHelper` sends its value in both `x-api-key` and `Authorization`. The gateway rejects that with 400, which Claude Code shows as "Invalid API key".
+- The token is valid for one hour, and Claude Code does not refresh it. When requests start failing with 401, start Claude Code again with a new token.
+- Keep `CLAUDE_CODE_MAX_OUTPUT_TOKENS` at 16384 or less for a team without the premium scope. Claude Code's default output limit is higher, and Cedar answers 403, which Claude Code shows as "Failed to authenticate". Opus also needs the premium scope.
+- `/context` estimates token counts from characters, because the gateway does not serve `/v1/messages/count_tokens`.
+- Verified with Claude Code 2.1.318: plain prompts, tool use over several turns, and Opus for the premium team.
+
 ## Configuration
 
 | Variable | Description | Default |
@@ -250,6 +278,8 @@ No license file yet.
 - Cedar reads `context.input.<field>` only behind a `has` guard. Without the guard, validation rejects the forbid as "Overly Restrictive".
 - Token rate limits count only `/v1/messages`, `/v1/chat/completions`, and `/v1/responses`, so InvokeModel traffic is outside every TPM limit. InvokeModel also carries the model ID in the URI, where Cedar cannot see it. The interceptor therefore allows InvokeModel for the premium scope only. It URL-decodes the ID and reduces an ARN to the model it names before checking it.
 - Guardrails in Policy is not offered in ap-northeast-2, so the interceptor calls `ApplyGuardrail`. `GUARDRAIL_FAIL_MODE` defaults to `open`, with an alarm.
+- The bedrock-runtime connector passes Anthropic `metadata.user_id` to Bedrock request metadata. That field allows only `[A-Za-z0-9 :_@$#=/+,.-]` and 256 characters. Claude Code sends a JSON string there, so the interceptor rewrites it (a JSON object becomes `key=value,...`).
+- The gateway rejects a request that carries both `x-api-key` and `Authorization` (400). It also does not serve `/v1/messages/count_tokens` (400, unsupported inference path).
 - An unservable model ID can return HTTP 200 with an error body (from Seoul, the bare `anthropic.claude-haiku-5-5`). That response is not fallback-eligible, so the drills use a 50 ms first-byte timeout instead.
 - Vended routing logs are best effort. They arrive 20 to 80 seconds late and out of order, and one line in the tests never arrived. Use them for trends, not per-request accounting.
 - Inference metrics are in the `ApplicationSignals` namespace. `AWS/Bedrock-AgentCore` holds only the Cedar and identity metrics.
@@ -265,6 +295,13 @@ No license file yet.
 - Rate limits are token buckets, so a burst can briefly exceed the per-minute number.
 - Per-model TPM limits are project settings, kept at or below 80% of this account's Global cross-Region TPM quotas. The gateway then throttles before Bedrock answers 429. Quotas differ per account; `uv run scripts/smoke_test.py --only quota-headroom` compares the deployed limits with the live quotas.
 - `matchPrincipals` conditions match IAM principals only, so this JWT-based gateway does not use them.
+- X-Ray Traces and Trace Map in the CloudWatch console show only indexed traces. Transaction Search indexes 1% by default, which leaves both nearly empty at low traffic. This account indexes 100%, a setting made outside the stacks with the command below.
+
+  ```bash
+  aws xray update-indexing-rule --name Default --rule '{"Probabilistic":{"DesiredSamplingPercentage":100}}'
+  ```
+
+  Every span is in the `aws/spans` log group either way.
 
 ## Cleanup
 
@@ -439,6 +476,34 @@ br.invoke_model(modelId="global.anthropic.claude-haiku-5-5", contentType="applic
 
 어느 대상이 응답했는지는 응답 값으로 알 수 있습니다. Claude 응답의 `id`가 `msg_bdrk_`로 시작하면 Bedrock이, 그 밖의 `msg_` ID면 CPonAWS가 응답했습니다. GPT 응답의 `model`이 `global.openai.*`이면 Bedrock Global CRIS, `openai.*`이면 Mantle입니다.
 
+### Claude Code
+
+Claude Code는 `ANTHROPIC_BASE_URL`과 bearer token으로 연결합니다. Gateway 설정은 `~/.claude/settings.json`이나 프로젝트의 `.claude/settings.json`에 둡니다.
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://<gateway-id>.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/inference",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5-5",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-5-5",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16384"
+  }
+}
+```
+
+그다음 새 토큰으로 Claude Code를 시작합니다.
+
+```bash
+ANTHROPIC_AUTH_TOKEN="$(uv run --quiet scripts/gateway_token.py team-standard)" claude
+```
+
+- 토큰은 `apiKeyHelper`나 `ANTHROPIC_API_KEY`가 아니라 `ANTHROPIC_AUTH_TOKEN`으로 넘깁니다. `apiKeyHelper`는 값을 `x-api-key`와 `Authorization` 두 헤더에 모두 보내는데, gateway는 이런 요청을 400으로 거부합니다(Claude Code에는 "Invalid API key"로 표시).
+- 토큰은 1시간 동안 유효하며 Claude Code가 갱신하지 않습니다. 요청이 401로 실패하기 시작하면 새 토큰으로 Claude Code를 다시 시작합니다.
+- premium scope가 없는 팀은 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`를 16384 이하로 둡니다. Claude Code의 기본 출력 한도는 이보다 커서 Cedar가 403을 돌려주고, Claude Code는 이를 "Failed to authenticate"로 표시합니다. Opus도 premium scope가 필요합니다.
+- Gateway가 `/v1/messages/count_tokens`를 지원하지 않으므로 `/context`는 토큰 수를 글자 수로 추정합니다.
+- Claude Code 2.1.318에서 일반 프롬프트, 여러 턴에 걸친 도구 사용, premium 팀의 Opus 호출을 확인했습니다.
+
 ## 환경 설정
 
 | 변수 | 설명 | 기본값 |
@@ -517,6 +582,8 @@ uv run scripts/smoke_test.py --only gpt failover routing-evidence
 - Cedar는 `context.input.<field>`를 `has` 가드 뒤에서만 읽을 수 있습니다. 가드가 없으면 검증 단계에서 forbid가 "Overly Restrictive"로 거부됩니다.
 - Token rate limit은 `/v1/messages`, `/v1/chat/completions`, `/v1/responses`만 집계하므로 InvokeModel 트래픽은 어떤 TPM 한도에도 걸리지 않습니다. InvokeModel은 모델 ID를 URI에 담으므로 Cedar도 볼 수 없습니다. 그래서 interceptor가 InvokeModel을 premium scope에만 허용합니다. 이때 ID를 URL 디코딩하고 ARN은 가리키는 모델로 줄인 뒤 검사합니다.
 - ap-northeast-2에서는 Guardrails in Policy를 제공하지 않으므로 interceptor가 `ApplyGuardrail`을 호출합니다. `GUARDRAIL_FAIL_MODE` 기본값은 `open`이며 알람이 걸려 있습니다.
+- bedrock-runtime connector는 Anthropic `metadata.user_id`를 Bedrock request metadata로 넘기는데, 여기에는 `[A-Za-z0-9 :_@$#=/+,.-]`와 256자 제한이 있습니다. Claude Code는 이 값을 JSON 문자열로 보내므로 interceptor가 허용 형식으로 바꿉니다(JSON 객체는 `key=value,...`).
+- Gateway는 `x-api-key`와 `Authorization`이 함께 온 요청을 400으로 거부하고, `/v1/messages/count_tokens`는 지원하지 않습니다(400, unsupported inference path).
 - 서빙할 수 없는 모델 ID가 HTTP 200과 오류 본문을 돌려줄 수 있습니다(서울에서 접두어 없는 `anthropic.claude-haiku-5-5`). 이 응답은 fallback 대상이 아니므로 drill에는 first-byte timeout 50ms를 사용합니다.
 - Vended 라우팅 로그는 전달을 보장하지 않습니다(best effort). 20~80초 늦게 순서 없이 도착하며 테스트 중 1건은 끝내 도착하지 않았습니다. 추세 분석에는 사용하되 건별 집계에는 사용하지 않습니다.
 - Inference 메트릭은 `ApplicationSignals` namespace에 있습니다. `AWS/Bedrock-AgentCore`에는 Cedar와 identity 메트릭만 있습니다.
@@ -532,6 +599,13 @@ uv run scripts/smoke_test.py --only gpt failover routing-evidence
 - Rate limit은 token bucket 방식이라 순간적으로 분당 한도를 넘는 요청이 통과할 수 있습니다.
 - 모델별 TPM 한도는 이 계정의 Global cross-Region TPM quota의 80% 이하로 정한 값입니다. 그래야 Bedrock이 429를 돌려주기 전에 gateway가 먼저 제한합니다. quota는 계정마다 다르므로 `uv run scripts/smoke_test.py --only quota-headroom`으로 배포된 한도와 현재 quota를 비교합니다.
 - `matchPrincipals` 조건은 IAM principal만 매칭하므로 JWT 기반인 이 gateway에서는 사용하지 않습니다.
+- CloudWatch 콘솔의 X-Ray Traces와 Trace Map은 색인된 trace만 보여 줍니다. Transaction Search의 기본 색인 비율은 1%라서 트래픽이 적으면 두 화면이 거의 비어 보입니다. 이 계정은 아래 명령으로 스택 밖에서 설정해 100%를 색인합니다.
+
+  ```bash
+  aws xray update-indexing-rule --name Default --rule '{"Probabilistic":{"DesiredSamplingPercentage":100}}'
+  ```
+
+  어느 경우든 모든 span은 `aws/spans` 로그 그룹에 있습니다.
 
 ## 정리
 

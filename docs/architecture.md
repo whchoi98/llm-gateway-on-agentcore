@@ -37,7 +37,7 @@ Rendered diagrams: [architecture.en.png](architecture.en.png), [request-flow.en.
 - **mantle target** -- GPT fallback: Bedrock Mantle in us-east-1 with in-Region model IDs under `/openai/v1`.
 
 ### Observability Layer
-- **lib/constructs/observability.ts** -- Vended gateway logs and X-Ray traces, metric filters on `body.routing`, a CloudWatch dashboard, and alarms (faults, throttles, active fallback, Lambda errors, guardrail errors).
+- **lib/constructs/observability.ts** -- Vended gateway logs and X-Ray traces (spans in `aws/spans` through Transaction Search, with Active tracing on both Lambdas), metric filters on `body.routing`, a CloudWatch dashboard, and alarms (faults, throttles, active fallback, Lambda errors, guardrail errors). The dashboard shows fallbacks by model, interceptor denials by reason (the `Denied` EMF metric), Bedrock tokens per minute and throttles per primary model, and span tables for target latency and fallback-served requests.
 
 ## Full Architecture Diagram
 
@@ -273,7 +273,7 @@ Anthropic Messages, OpenAI Chat Completions와 Responses, Bedrock InvokeModel AP
 - **mantle target** -- GPT fallback입니다. us-east-1 Bedrock Mantle의 `/openai/v1` 경로에서 리전 내 모델 ID를 사용합니다.
 
 ### Observability Layer
-- **lib/constructs/observability.ts** -- Gateway vended log와 X-Ray trace, `body.routing` 기반 metric filter, CloudWatch 대시보드, 알람(fault, throttle, fallback 발생, Lambda 오류, 가드레일 오류)을 구성합니다.
+- **lib/constructs/observability.ts** -- Gateway vended log와 X-Ray trace(Transaction Search로 `aws/spans`에 저장, 두 Lambda 모두 Active tracing), `body.routing` 기반 metric filter, CloudWatch 대시보드, 알람(fault, throttle, fallback 발생, Lambda 오류, 가드레일 오류)을 구성합니다. 대시보드는 모델별 fallback, 사유별 interceptor 거부(`Denied` EMF 메트릭), primary 모델별 Bedrock 분당 토큰과 throttle, 대상별 지연과 fallback 처리 요청을 보여 주는 span 표를 포함합니다.
 
 ## 전체 아키텍처 다이어그램
 
