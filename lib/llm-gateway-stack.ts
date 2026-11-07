@@ -27,11 +27,16 @@ import { InboundAuth } from './constructs/inbound-auth';
 import { Observability } from './constructs/observability';
 
 export interface LlmGatewayStackProps extends StackProps {
-  /** ENFORCE (default) or LOG_ONLY — LOG_ONLY records Cedar decisions without denying. */
-  readonly policyMode?: 'ENFORCE' | 'LOG_ONLY';
+  /**
+   * ENFORCE (default) or LOG_ONLY — LOG_ONLY records Cedar decisions without denying.
+   * OFF detaches the policy engine (benchmark only): no Cedar evaluation, no ~40/s policy throttle.
+   */
+  readonly policyMode?: 'ENFORCE' | 'LOG_ONLY' | 'OFF';
   readonly alarmEmail?: string;
   /** Deploy the 1P (Claude Platform on AWS) target and fallback chains. Requires the API key secret. Default true. */
   readonly enableAnthropicFallback?: boolean;
+  /** false makes the interceptor skip ApplyGuardrail (benchmark only). Default true. */
+  readonly guardrailEnabled?: boolean;
 }
 
 const METRICS_NAMESPACE = 'LlmGateway';
@@ -40,11 +45,14 @@ const METRICS_NAMESPACE = 'LlmGateway';
  * LLM Gateway on AgentCore Gateway.
  *
  *   client (Anthropic / OpenAI / Bedrock SDK, Cognito JWT)
- *     → inbound JWT authorizer → rate limits (RPM/TPM/CPS)
- *     → rules (match the model as sent) → REQUEST interceptor (auto routing,
- *       guardrail, metrics) → Cedar policy
+ *     → inbound JWT authorizer → REQUEST interceptor (auto routing, guardrail,
+ *       metrics) → rate limits (RPM/TPM/CPS) → Cedar policy
+ *     Rules match the model as the client sent it, not the interceptor's rewrite.
+ *     (Interceptor before rate limits: measured 2026-11-05. Rate limits before
+ *     rules and Cedar: AWS docs.)
  *     → Claude: Bedrock Global CRIS (Seoul) ──fallback──▶ Claude Platform on AWS (1P, via proxy λ)
  *     → GPT:    Bedrock Global CRIS (Seoul) ──fallback──▶ Bedrock Mantle us-east-1
+ *     → Kimi:   Bedrock Global CRIS (Seoul), no fallback
  */
 export class LlmGatewayStack extends Stack {
   readonly gateway: agentcore.CfnGateway;
@@ -82,6 +90,7 @@ export class LlmGatewayStack extends Stack {
       teamClients: teamClientMap,
       premiumScope: auth.premiumScope,
       metricsNamespace: METRICS_NAMESPACE,
+      guardrailEnabled: props.guardrailEnabled,
     });
 
     // ------------------------------------------------------------------
@@ -198,10 +207,9 @@ export class LlmGatewayStack extends Stack {
           inputConfiguration: { passRequestHeaders: true },
         },
       ],
-      policyEngineConfiguration: {
-        arn: this.policyEngine.attrPolicyEngineArn,
-        mode: props.policyMode ?? 'ENFORCE',
-      },
+      ...(props.policyMode === 'OFF'
+        ? {}
+        : { policyEngineConfiguration: { arn: this.policyEngine.attrPolicyEngineArn, mode: props.policyMode ?? 'ENFORCE' } }),
       exceptionLevel: GATEWAY_DEBUG_ERRORS ? 'DEBUG' : undefined,
     });
     this.gateway.node.addDependency(role); // role + its default policy must exist first
@@ -235,7 +243,7 @@ export class LlmGatewayStack extends Stack {
     // only (Bedrock serves Claude only in the Messages / InvokeModel schema, so
     // the fallback exposes the same surface as the primary).
     const fallbackModels = (target: string) =>
-      MODELS.filter((m) => m.fallback.target === target).map((m) => ({ model: m.fallback.model }));
+      MODELS.flatMap((m) => (m.fallback?.target === target ? [{ model: m.fallback.model }] : []));
     if (oneP) {
       const target = chain(
         new agentcore.CfnGatewayTarget(this, 'CpOnAwsTarget', {
@@ -317,15 +325,22 @@ export class LlmGatewayStack extends Stack {
     };
     // A fallback is only rendered when its target exists in this deployment.
     const targetEnabled = (target: string) => target !== TARGET_ANTHROPIC || with1p;
-    const fallbackBlock = (m: ModelRoute, firstByteTimeoutMs: number, circuitBreaker: 'ENABLED' | 'DISABLED' = 'ENABLED') =>
-      targetEnabled(m.fallback.target)
+    // The auto route and the drills exist to reach a fallback, so their models must have one.
+    const fallbackOf = (m: ModelRoute) => {
+      if (!m.fallback) throw new Error(`model ${m.key} has no fallback`);
+      return m.fallback;
+    };
+    // The first-byte timeout lives inside the fallback block (rule schema), so a route
+    // without a fallback has no timeout at all.
+    const fallbackBlock = (m: ModelRoute, firstByteTimeoutMs: number | undefined, circuitBreaker: 'ENABLED' | 'DISABLED' = 'ENABLED') =>
+      m.fallback && targetEnabled(m.fallback.target)
         ? {
             CircuitBreaker: { Mode: circuitBreaker },
             TriggerOn: { StatusCodes: FALLBACK_STATUS_CODES, Errors: FALLBACK_ERRORS },
             FirstByteTimeoutMilliseconds: firstByteTimeoutMs,
             TargetFallback: [{ TargetName: m.fallback.target, Model: m.fallback.model }],
           }
-        : undefined; // e.g. 3P-only mode (-c enable1p=false) for Claude
+        : undefined; // Kimi (no fallback), or Claude in 3P-only mode (-c enable1p=false)
 
     // Every name a client may use for a model maps to the same rule, so aliases
     // and vendor/Bedrock-style IDs get the same fallback chain as the canonical name.
@@ -333,7 +348,7 @@ export class LlmGatewayStack extends Stack {
       rule(
         `Route-${m.key}`,
         m.priority,
-        `${m.canonical}: Bedrock ${m.bedrockModel}, fallback ${m.fallback.target} ${m.fallback.model}`,
+        `${m.canonical}: Bedrock ${m.bedrockModel}, ${m.fallback ? `fallback ${m.fallback.target} ${m.fallback.model}` : 'no fallback'}`,
         [m.canonical, m.bedrockModel, m.vendorModel, ...m.aliases],
         { StaticRoute: { TargetName: TARGET_BEDROCK, Model: m.bedrockModel, Fallback: fallbackBlock(m, m.primaryFirstByteTimeoutMs) } },
       );
@@ -342,8 +357,9 @@ export class LlmGatewayStack extends Stack {
     // Dynamic routing: the primary has no pinned model, so Bedrock serves the
     // model the interceptor chose; a Bedrock failure degrades to one fixed 1P model.
     const degraded = modelByKey(AUTO_ROUTE.degradedModelKey);
+    const degradedTo = fallbackOf(degraded);
     rule('Route-auto', AUTO_ROUTE.priority,
-      `${AUTO_ROUTE.alias}: interceptor-selected model on Bedrock, degrades to ${degraded.fallback.target} ${degraded.fallback.model}`,
+      `${AUTO_ROUTE.alias}: interceptor-selected model on Bedrock, degrades to ${degradedTo.target} ${degradedTo.model}`,
       [AUTO_ROUTE.alias], {
         StaticRoute: { TargetName: TARGET_BEDROCK, Fallback: fallbackBlock(degraded, AUTO_ROUTE.firstByteTimeoutMs) },
       });
@@ -371,9 +387,10 @@ export class LlmGatewayStack extends Stack {
     // briefly need two rules with the same priority.
     FAILOVER_DRILLS.forEach((d, i) => {
       const m = modelByKey(d.modelKey);
-      if (!targetEnabled(m.fallback.target)) return;
+      const to = fallbackOf(m);
+      if (!targetEnabled(to.target)) return;
       rule(i === 0 ? 'Route-failover-drill' : `Route-failover-drill-${m.key}`, d.priority,
-        `${d.alias}: simulated stall on Bedrock, always fails over to ${m.fallback.target} (operational drill)`,
+        `${d.alias}: simulated stall on Bedrock, always fails over to ${to.target} (operational drill)`,
         [d.alias], {
           StaticRoute: {
             TargetName: TARGET_BEDROCK,
@@ -384,7 +401,9 @@ export class LlmGatewayStack extends Stack {
     });
 
     // ------------------------------------------------------------------
-    // 9. Rate limits (evaluated before rules)
+    // 9. Rate limits: before rules and Cedar (AWS docs), but after the REQUEST
+    //    interceptor (measured 2026-11-05: requests rejected here had already invoked
+    //    the interceptor and ApplyGuardrail), so they cannot shield either one.
     // ------------------------------------------------------------------
     const perMinute = (rate: number) => [{ rate, period: 'minute' }];
     const perSecond = (rate: number) => [{ rate, period: 'second' }];
@@ -419,7 +438,7 @@ export class LlmGatewayStack extends Stack {
         dimensionKeys: ['qualifiedModelId'],
         entries: [
           ...MODELS.flatMap((m) =>
-            [m.bedrockModel, m.fallback.model].map((model) => ({
+            [m.bedrockModel, ...(m.fallback ? [m.fallback.model] : [])].map((model) => ({
               dimensions: { qualifiedModelId: model },
               tokens: perMinute(m.tpm),
             })),

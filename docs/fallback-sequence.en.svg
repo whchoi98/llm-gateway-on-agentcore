@@ -69,7 +69,7 @@
 <text x="1016" y="78" fill="#545B64" font-size="11" font-family="'Amazon Ember Mono', ui-monospace, monospace">Claude: CPonAWS (1P)</text>
 <text x="1016" y="94" fill="#545B64" font-size="11" font-family="'Amazon Ember Mono', ui-monospace, monospace">GPT: Mantle us-east-1</text>
 <text x="24" y="612" fill="#545B64" font-size="10" font-family="'Amazon Ember Mono', ui-monospace, monospace">NOT ON 400: the error returns to the caller unchanged.   NOT AFTER THE FIRST BYTE: once a stream has started, the caller gets a partial response and an error, and retries.</text>
-<text x="24" y="630" fill="#545B64" font-size="10" font-family="'Amazon Ember Mono', ui-monospace, monospace">BILLING: each attempt is one gateway invocation, so an open breaker also saves the failed attempt.   GPT takes the same path, with Bedrock Mantle as the fallback.</text>
+<text x="24" y="630" fill="#545B64" font-size="10" font-family="'Amazon Ember Mono', ui-monospace, monospace">BILLING: each attempt is one gateway invocation, so an open breaker also saves the failed attempt.   GPT takes the same path, with Bedrock Mantle as the fallback; Kimi has none.</text>
 <line x1="24" y1="672" x2="1256" y2="672" stroke="rgba(35,47,62,0.10)" stroke-width="0.8"/>
 <text x="24" y="692" fill="#545B64" font-size="8" font-family="'Amazon Ember Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
 <line x1="104" y1="688" x2="136" y2="688" stroke="#0972D3" stroke-width="1.2"/>

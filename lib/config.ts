@@ -46,7 +46,7 @@ export const MANTLE = {
   pathPrefix: '/openai',
 };
 
-export type ModelFamily = 'claude' | 'gpt';
+export type ModelFamily = 'claude' | 'gpt' | 'kimi';
 
 export interface ModelRoute {
   /** Short key used for construct IDs and metric dimensions. */
@@ -58,14 +58,16 @@ export interface ModelRoute {
   readonly vendorModel: string;
   /** Primary destination on the `bedrock` target: Global cross-Region inference profile ID. */
   readonly bedrockModel: string;
-  /** Fallback destination (target + model ID on that target). */
-  readonly fallback: { readonly target: string; readonly model: string };
+  /** Fallback destination (target + model ID on that target). Absent: Bedrock Global CRIS only. */
+  readonly fallback?: { readonly target: string; readonly model: string };
   /**
    * First-byte timeout for the primary. Non-streaming requests send their first
    * byte only after generation finishes, so this must cover the slowest
    * expected non-streaming completion — otherwise healthy requests fall back.
+   * It is a fallback trigger: the rule schema has no timeout outside the
+   * fallback block, so a route without a fallback has none.
    */
-  readonly primaryFirstByteTimeoutMs: number;
+  readonly primaryFirstByteTimeoutMs?: number;
   /** Rule priority (lower = evaluated first). */
   readonly priority: number;
   /** Requires the `premium` OAuth scope (enforced by Cedar policy). */
@@ -88,7 +90,8 @@ export interface ModelRoute {
   readonly aliases: string[];
 }
 
-type RouteOptions = Pick<ModelRoute, 'key' | 'primaryFirstByteTimeoutMs' | 'priority' | 'tpm'> &
+type RouteOptions = Pick<ModelRoute, 'key' | 'priority' | 'tpm'> &
+  Required<Pick<ModelRoute, 'primaryFirstByteTimeoutMs'>> &
   Partial<Pick<ModelRoute, 'premiumOnly' | 'aliases'>>;
 
 /** Claude: Bedrock Global CRIS → Claude Platform on AWS (same model ID as canonical). */
@@ -115,6 +118,21 @@ const gpt = (canonical: string, o: RouteOptions): ModelRoute => ({
   ...o,
 });
 
+/**
+ * Kimi: Bedrock Global CRIS (Seoul) only. Without a fallback the route has no
+ * first-byte timeout either. Bedrock serves Kimi in the OpenAI schemas (Chat
+ * Completions, Responses) and InvokeModel, not in Anthropic Messages.
+ */
+const kimi = (canonical: string, o: Omit<RouteOptions, 'primaryFirstByteTimeoutMs'>): ModelRoute => ({
+  family: 'kimi',
+  canonical,
+  vendorModel: `moonshotai.${canonical}`,
+  bedrockModel: `global.moonshotai.${canonical}`,
+  premiumOnly: false,
+  aliases: [],
+  ...o,
+});
+
 export const MODELS: ModelRoute[] = [
   // tpm vs. Global cross-Region TPM quota in ap-northeast-2 (2026-11-04): Opus 4M of 30M and
   // Haiku 8M of 10M (cost-capped below 80%); Sonnet 4.8M of 6M; GPT 6.1 Sol and 6 Sol 1.6M of 2M;
@@ -128,6 +146,9 @@ export const MODELS: ModelRoute[] = [
   gpt('gpt-6-astra', { key: 'gpt-6-astra', primaryFirstByteTimeoutMs: 180_000, priority: 220, tpm: 3_200_000 }),
   gpt('gpt-6-sol', { key: 'gpt-6-sol', primaryFirstByteTimeoutMs: 180_000, priority: 230, tpm: 1_600_000 }),
   gpt('gpt-6-luna', { key: 'gpt-6-luna', primaryFirstByteTimeoutMs: 120_000, priority: 240, tpm: 3_200_000 }),
+  // Kimi K3.1: 800K = 80% of the AWS default Global cross-Region TPM quota (1M). This account's
+  // applied quota was 0 on 2026-11-07, so Bedrock throttles every call until the quota is raised.
+  kimi('kimi-k3.1', { key: 'kimi-k3-1', priority: 300, tpm: 800_000 }),
 ];
 export const modelByKey = (key: string) => {
   const m = MODELS.find((x) => x.key === key);
@@ -204,6 +225,8 @@ export interface TeamConfig {
 export const TEAMS: TeamConfig[] = [
   { name: 'team-standard', premium: false, rpm: 60, tpm: 200_000, connections: 10 },
   { name: 'team-premium', premium: true, rpm: 300, tpm: 2_000_000, connections: 50 },
+  // Benchmark only (load test of the gateway); remove when the benchmark ends.
+  { name: 'team-bench', premium: true, rpm: 60_000, tpm: 10_000_000, connections: 2_000 },
 ];
 
 /** Applied to any authenticated client without a named entry. */

@@ -22,6 +22,8 @@ export interface GuardrailInterceptorProps {
   readonly teamClients: Record<string, string>;
   readonly premiumScope: string;
   readonly metricsNamespace: string;
+  /** false skips ApplyGuardrail (benchmark flag `-c guardrail=off`); the guardrail resource stays. Default true. */
+  readonly guardrailEnabled?: boolean;
 }
 
 /**
@@ -127,6 +129,7 @@ export class GuardrailInterceptor extends Construct {
         GUARDRAIL_ID: this.guardrail.attrGuardrailId,
         GUARDRAIL_VERSION: this.guardrailVersion.attrVersion,
         GUARDRAIL_FAIL_MODE,
+        GUARDRAIL_ENABLED: String(props.guardrailEnabled ?? true),
         GUARDRAIL_MAX_CHARS: String(GUARDRAIL_MAX_CHARS),
         METRICS_NAMESPACE: props.metricsNamespace,
         CANONICAL_MODELS: JSON.stringify(canonical),

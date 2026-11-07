@@ -13,7 +13,7 @@
 
 agentcore-llm-gateway is an LLM gateway built on Amazon Bedrock AgentCore Gateway in ap-northeast-2 (Seoul).
 It exposes one `/inference` endpoint that speaks the Anthropic Messages, OpenAI Chat Completions and Responses, and Bedrock InvokeModel APIs, and it is deployed with AWS CDK.
-Every request is authenticated, rate-limited, routed by model name, checked by an interceptor and Cedar policies, and sent to Bedrock Global CRIS; eligible failures fall back to Claude Platform on AWS for Claude or to Bedrock Mantle in us-east-1 for GPT.
+Every request is authenticated, rate-limited, routed by model name, checked by an interceptor and Cedar policies, and sent to Bedrock Global CRIS; eligible failures fall back to Claude Platform on AWS for Claude or to Bedrock Mantle in us-east-1 for GPT. Kimi has no fallback.
 
 Rendered diagrams: [architecture.en.png](architecture.en.png), [request-flow.en.png](request-flow.en.png), [fallback-sequence.en.png](fallback-sequence.en.png), [deploy-order.en.png](deploy-order.en.png), and the page [architecture.en.html](architecture.en.html).
 
@@ -32,7 +32,7 @@ Rendered diagrams: [architecture.en.png](architecture.en.png), [request-flow.en.
 - **lambda/cponaws-proxy/** -- Lambda Function URL (AWS_IAM, response streaming) that adds the `anthropic-workspace-id` header and the API key before calling Claude Platform on AWS.
 
 ### AI/ML Layer
-- **bedrock target** -- `bedrock-runtime` connector in Seoul; serves the Global CRIS profiles `global.anthropic.claude-*` and `global.openai.gpt-6*` for every primary route.
+- **bedrock target** -- `bedrock-runtime` connector in Seoul; serves the Global CRIS profiles `global.anthropic.claude-*`, `global.openai.gpt-6*`, and `global.moonshotai.kimi-k3.1` for every primary route.
 - **cponaws target** -- Claude fallback: Claude Platform on AWS (1P) in Seoul, reached through the proxy.
 - **mantle target** -- GPT fallback: Bedrock Mantle in us-east-1 with in-Region model IDs under `/openai/v1`.
 
@@ -230,8 +230,9 @@ flowchart LR
 
 ## Key Design Decisions
 
-- Use the `bedrock-runtime` connector for the primary -- Claude 5.5 and GPT 6.x Global CRIS profiles are served on `bedrock-runtime` only, and the connector also accepts Anthropic Messages and OpenAI requests.
+- Use the `bedrock-runtime` connector for the primary -- Claude 5.5, GPT 6.x, and Kimi K3.1 Global CRIS profiles are served on `bedrock-runtime` only, and the connector also accepts Anthropic Messages and OpenAI requests.
 - Fall back per model family -- Claude goes to Claude Platform on AWS because it is the 1P platform; GPT goes to Mantle us-east-1 because Seoul cannot call the `us.` profiles and Mantle has separate capacity and quotas.
+- Serve Kimi K3.1 on Bedrock Global CRIS only -- no fallback target is configured for it, so a Bedrock error reaches the caller, and its route has no first-byte timeout (the rule schema keeps the timeout inside the fallback block). Like GPT, it is served only through the OpenAI APIs and InvokeModel.
 - Put a streaming Lambda proxy in front of CPonAWS -- every CPonAWS request needs `anthropic-workspace-id`, a gateway target cannot add static headers, and the model discovery call at target creation bypasses interceptors.
 - Apply the guardrail in the interceptor -- Guardrails in Policy is not offered in ap-northeast-2, and the interceptor applies one check to every primary and fallback path.
 - Keep static aliases in rule `matchModels` -- rules match the model as sent, before the interceptor, so only rule-matched names get the fallback chain.
@@ -249,7 +250,7 @@ flowchart LR
 
 agentcore-llm-gateway는 ap-northeast-2(서울)의 Amazon Bedrock AgentCore Gateway로 만든 LLM Gateway입니다.
 Anthropic Messages, OpenAI Chat Completions와 Responses, Bedrock InvokeModel API를 받는 `/inference` 엔드포인트 하나를 제공하며, AWS CDK로 배포합니다.
-모든 요청은 인증, 요청 한도, 모델 이름 기반 라우팅, interceptor와 Cedar 정책 검사를 거쳐 Bedrock Global CRIS로 가고, fallback 대상 오류이면 Claude는 Claude Platform on AWS로, GPT는 us-east-1 Bedrock Mantle로 넘어갑니다.
+모든 요청은 인증, 요청 한도, 모델 이름 기반 라우팅, interceptor와 Cedar 정책 검사를 거쳐 Bedrock Global CRIS로 가고, fallback 대상 오류이면 Claude는 Claude Platform on AWS로, GPT는 us-east-1 Bedrock Mantle로 넘어갑니다. Kimi에는 fallback이 없습니다.
 
 렌더링한 다이어그램: [architecture.ko.png](architecture.ko.png), [request-flow.ko.png](request-flow.ko.png), [fallback-sequence.ko.png](fallback-sequence.ko.png), [deploy-order.ko.png](deploy-order.ko.png), 페이지 [architecture.html](architecture.html).
 
@@ -268,7 +269,7 @@ Anthropic Messages, OpenAI Chat Completions와 Responses, Bedrock InvokeModel AP
 - **lambda/cponaws-proxy/** -- Lambda Function URL(AWS_IAM, 응답 스트리밍)입니다. `anthropic-workspace-id` 헤더와 API 키를 붙여 Claude Platform on AWS를 호출합니다.
 
 ### AI/ML Layer
-- **bedrock target** -- 서울의 `bedrock-runtime` connector입니다. 모든 primary route에 Global CRIS 프로필 `global.anthropic.claude-*`와 `global.openai.gpt-6*`를 제공합니다.
+- **bedrock target** -- 서울의 `bedrock-runtime` connector입니다. 모든 primary route에 Global CRIS 프로필 `global.anthropic.claude-*`, `global.openai.gpt-6*`, `global.moonshotai.kimi-k3.1`을 제공합니다.
 - **cponaws target** -- Claude fallback입니다. 프록시를 거쳐 서울의 Claude Platform on AWS(1P)로 갑니다.
 - **mantle target** -- GPT fallback입니다. us-east-1 Bedrock Mantle의 `/openai/v1` 경로에서 리전 내 모델 ID를 사용합니다.
 
@@ -466,8 +467,9 @@ flowchart LR
 
 ## 주요 설계 결정
 
-- Primary에 `bedrock-runtime` connector 사용 -- Claude 5.5와 GPT 6.x의 Global CRIS 프로필은 `bedrock-runtime`에서만 제공되고, 이 connector는 Anthropic Messages와 OpenAI 요청도 받습니다.
+- Primary에 `bedrock-runtime` connector 사용 -- Claude 5.5, GPT 6.x, Kimi K3.1의 Global CRIS 프로필은 `bedrock-runtime`에서만 제공되고, 이 connector는 Anthropic Messages와 OpenAI 요청도 받습니다.
 - 모델 계열별 fallback -- Claude는 1P 플랫폼인 Claude Platform on AWS로 보냅니다. GPT는 서울에서 `us.` 프로필을 호출할 수 없고 Mantle의 용량과 quota가 별도이므로 Mantle us-east-1로 보냅니다.
+- Kimi K3.1은 Bedrock Global CRIS로만 서빙 -- fallback 대상을 두지 않았으므로 Bedrock 오류가 그대로 호출자에게 가고, route에 first-byte timeout도 없습니다(rule 스키마에서 timeout은 fallback 블록 안에만 있습니다). GPT처럼 OpenAI API와 InvokeModel로만 서빙합니다.
 - CPonAWS 앞에 스트리밍 Lambda 프록시 배치 -- CPonAWS는 모든 요청에 `anthropic-workspace-id`가 필요한데, gateway target은 고정 헤더를 넣을 수 없고 target 생성 시의 모델 discovery 호출은 interceptor를 거치지 않습니다.
 - 가드레일을 interceptor에서 적용 -- ap-northeast-2에서는 Guardrails in Policy를 제공하지 않으며, interceptor는 모든 primary와 fallback 경로에 같은 검사를 적용합니다.
 - 정적 alias는 rule의 `matchModels`에 둠 -- rule은 interceptor보다 먼저, 클라이언트가 보낸 model 값으로 매칭하므로 rule에 매칭된 이름만 fallback chain을 탑니다.

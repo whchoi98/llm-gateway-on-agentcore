@@ -10,5 +10,6 @@
 - Only `claude-auto` rewrites `model`, to a Bedrock ID that the auto route serves without a pinned model. Rewriting a static alias here would skip its rule and fallback chain.
 - The gateway does not pass headers from a short-circuit response (such as `x-amzn-errortype`) to the caller, so Bedrock-dialect errors also put the error code in the body's `__type`, which AWS SDKs read.
 - Guardrail errors follow `GUARDRAIL_FAIL_MODE` (default `open`, with an alarm); `closed` blocks every request while the guardrail is unavailable.
+- `GUARDRAIL_ENABLED=false` (deploy flag `-c guardrail=off`, benchmarks only) skips ApplyGuardrail. Requests still emit EMF with `GuardrailLatency` 0, and the guardrail smoke checks fail by design while it is off.
 - The proxy exists only because CPonAWS needs `anthropic-workspace-id` on every request and a gateway target cannot add static headers. Keep its path allowlist; the Function URL uses `AWS_IAM`, so only the gateway role can call it.
 - Keep responses streaming end to end: the proxy must not buffer, and the gateway has no RESPONSE interceptor because HTTP interceptors buffer the whole response.

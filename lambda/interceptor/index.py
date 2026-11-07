@@ -13,7 +13,8 @@ Responsibilities
    doing it here applies the same check to the 3P and the 1P path.
 3. Guard rails the gateway cannot express:
    - OpenAI-dialect requests for Claude get a clear 400 (Bedrock serves Claude
-     only in the Anthropic Messages / InvokeModel schema).
+     only in the Anthropic Messages / InvokeModel schema), and so do Anthropic
+     Messages requests for GPT and Kimi (served only in the OpenAI schemas).
    - InvokeModel paths (`/model/{modelId}/invoke[-with-response-stream]`) are
      for callers with the premium scope only. The gateway's token rate limits
      count only Messages, Chat Completions and Responses, and Cedar cannot see a
@@ -47,6 +48,8 @@ logger.setLevel(logging.INFO)
 GUARDRAIL_ID = os.environ["GUARDRAIL_ID"]
 GUARDRAIL_VERSION = os.environ["GUARDRAIL_VERSION"]
 GUARDRAIL_FAIL_MODE = os.environ.get("GUARDRAIL_FAIL_MODE", "open")
+# Benchmark switch (deploy with `-c guardrail=off`): skip ApplyGuardrail entirely.
+GUARDRAIL_ENABLED = os.environ.get("GUARDRAIL_ENABLED", "true") != "false"
 GUARDRAIL_MAX_CHARS = int(os.environ.get("GUARDRAIL_MAX_CHARS", "20000"))
 METRICS_NAMESPACE = os.environ.get("METRICS_NAMESPACE", "LlmGateway")
 CANONICAL = json.loads(os.environ.get("CANONICAL_MODELS", "{}"))
@@ -224,7 +227,7 @@ def _deny(dialect: str, status: int, kind: str, message: str) -> dict:
 # ---------------------------------------------------------------------------
 def _apply_guardrail(text: str):
     """Returns (blocked: bool, reason: str, latency_ms: float, error: bool)."""
-    if not text.strip():
+    if not GUARDRAIL_ENABLED or not text.strip():
         return False, "", 0.0, False
     started = time.perf_counter()
     try:
@@ -344,9 +347,10 @@ def lambda_handler(event, context):
                   "Claude models are served through the Anthropic Messages API on this gateway "
                   "(POST /inference/v1/messages, e.g. the Anthropic SDK) or Bedrock InvokeModel. "
                   "Bedrock does not serve Claude in the OpenAI Chat Completions schema.")
-    elif dialect == "anthropic" and family == "gpt":
+    elif dialect == "anthropic" and family != "claude":
+        # GPT and Kimi: Bedrock serves them in the OpenAI schemas, not Anthropic Messages.
         denial = (400, "unsupported_dialect",
-                  "GPT models are served through the OpenAI APIs on this gateway "
+                  f"{model} is served through the OpenAI APIs on this gateway "
                   "(POST /inference/v1/chat/completions or /inference/v1/responses, e.g. the OpenAI SDK) "
                   "or Bedrock InvokeModel with a Chat Completions body.")
     elif dialect == "bedrock" and not premium:

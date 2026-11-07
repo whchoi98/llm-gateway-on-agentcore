@@ -202,7 +202,7 @@ def architecture():
         node(232, 448, 240, 80, "Interceptor Lambda",
              [T("Guardrail, claude-auto", "가드레일, claude-auto"), T("dialect, premium, EMF", "dialect, premium 검사, EMF")], I_LAMBDA),
         node(232, 584, 240, 56, "CloudWatch / X-Ray", [T("routing logs, alarms", "라우팅 로그, 알람")], I_CLOUDWATCH),
-        node(664, 248, 240, 80, "Amazon Bedrock", ["Global CRIS, global.*", "Claude 5.5, GPT 6.x"], I_BEDROCK),
+        node(664, 248, 240, 80, "Amazon Bedrock", ["Global CRIS, global.*", "Claude, GPT, Kimi"], I_BEDROCK),
         node(664, 400, 240, 80, T("CPonAWS proxy", "CPonAWS 프록시"),
              ["Lambda Function URL (IAM)", T("workspace (SSM), key (SM)", "workspace(SSM), 키(SM)")], I_LAMBDA),
         node(992, 400, 240, 80, "Claude Platform on AWS", ["aws-external-anthropic", "claude-*-5-5 (1P)"], kind="external"),
@@ -215,8 +215,8 @@ def architecture():
         ("line", T("AUTH CHECK / TELEMETRY", "인증 확인 / 텔레메트리"), MUTED, True),
     ], P)
     title = T("AgentCore LLM Gateway architecture", "AgentCore LLM Gateway 아키텍처")
-    desc = T("Clients get a Cognito token and call one AgentCore Gateway in Seoul, which sends Claude and GPT traffic to Bedrock Global CRIS first and falls back to Claude Platform on AWS for Claude or to Bedrock Mantle in us-east-1 for GPT.",
-             "클라이언트는 Cognito 토큰으로 서울의 AgentCore Gateway 하나를 호출하고, Gateway는 Claude와 GPT 요청을 Bedrock Global CRIS로 먼저 보낸 뒤 실패하면 Claude는 Claude Platform on AWS로, GPT는 us-east-1 Bedrock Mantle로 넘깁니다.")
+    desc = T("Clients get a Cognito token and call one AgentCore Gateway in Seoul, which sends Claude, GPT and Kimi traffic to Bedrock Global CRIS first. On failure, Claude falls back to Claude Platform on AWS and GPT to Bedrock Mantle in us-east-1; Kimi has no fallback, so its errors go back to the caller.",
+             "클라이언트는 Cognito 토큰으로 서울의 AgentCore Gateway 하나를 호출하고, Gateway는 Claude, GPT, Kimi 요청을 Bedrock Global CRIS로 먼저 보냅니다. 실패하면 Claude는 Claude Platform on AWS로, GPT는 us-east-1 Bedrock Mantle로 넘기고, Kimi는 fallback이 없어 오류를 그대로 호출자에게 돌려줍니다.")
     return f'''<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="{P}-title {P}-desc">
 <title id="{P}-title">{esc(title)}</title>
 <desc id="{P}-desc">{esc(desc)}</desc>
@@ -276,13 +276,13 @@ def flow():
         node(976, 112, 240, 96, T("Cedar policy", "Cedar 정책"),
              ["invoke scope, premium", T("max output tokens", "최대 출력 토큰")], I_AGENTCORE,
              chips=[(1128, 180, 80, "403", True)], step=4),
-        node(976, 280, 240, 80, "Amazon Bedrock", [T("Global CRIS, Seoul", "Global CRIS, 서울"), "global.anthropic|openai.*"], I_BEDROCK, step=5),
+        node(976, 280, 240, 80, "Amazon Bedrock", [T("Global CRIS, Seoul", "Global CRIS, 서울"), "global.<vendor>.<model>"], I_BEDROCK, step=5),
         node(576, 440, 240, 80, "Claude Platform on AWS", [T("via proxy λ, +workspace", "proxy λ 경유, +workspace"), "claude-*-5-5 (1P)"], kind="external"),
         node(848, 440, 240, 80, "Bedrock Mantle", ["us-east-1 /openai/v1", "openai.gpt-6*"], I_BEDROCK),
         node(136, 440, 240, 80, T("Response", "응답"), [T("SSE stream or JSON", "SSE 스트림 또는 JSON"), T("id or model shows who served", "id, model로 응답 주체 확인")], kind="input", rx=20),
     ]
-    note_text = T("FALLBACK ON: 429, 5XX, 408, 403, FIRST_BYTE_TIMEOUT, CONNECTION_ERROR, UNROUTABLE.   NOT ON 400, AND NOT ONCE A STREAM HAS STARTED.",
-                  "FALLBACK 조건: 429, 5XX, 408, 403, FIRST_BYTE_TIMEOUT, CONNECTION_ERROR, UNROUTABLE.   400은 제외하며, 스트림이 시작된 뒤에는 FALLBACK하지 않습니다.")
+    note_text = T("FALLBACK ON: 429, 5XX, 408, 403, FIRST_BYTE_TIMEOUT, CONNECTION_ERROR, UNROUTABLE.   NOT ON 400, AND NOT ONCE A STREAM HAS STARTED.   KIMI HAS NO FALLBACK.",
+                  "FALLBACK 조건: 429, 5XX, 408, 403, FIRST_BYTE_TIMEOUT, CONNECTION_ERROR, UNROUTABLE.   400은 제외하며, 스트림이 시작된 뒤에는 FALLBACK하지 않습니다.   Kimi는 FALLBACK 대상이 아닙니다.")
     note = f'<text x="24" y="600" fill="{MUTED}" font-size="10" font-family="{MONO}">{esc(note_text)}</text>'
     leg = legend(640, W, [
         ("line", T("PIPELINE", "처리 단계"), INK, False),
@@ -291,8 +291,8 @@ def flow():
         ("chip", T("REJECTED WITH STATUS", "거부 (상태 코드)"), None, False),
     ], P)
     title = T("LLM Gateway request flow", "LLM Gateway 요청 흐름")
-    desc = T("A request passes authentication and rate limits, rule matching, the interceptor and Cedar policy, then goes to Bedrock Global CRIS; eligible failures fall back to Claude Platform on AWS for Claude or Bedrock Mantle for GPT before the response returns.",
-             "요청은 인증과 요청 한도, rule 매칭, interceptor, Cedar 정책을 거쳐 Bedrock Global CRIS로 가고, fallback 대상 오류이면 Claude는 Claude Platform on AWS로, GPT는 Bedrock Mantle로 넘어간 뒤 응답이 반환됩니다.")
+    desc = T("A request passes authentication and rate limits, rule matching, the interceptor and Cedar policy, then goes to Bedrock Global CRIS; eligible failures fall back to Claude Platform on AWS for Claude or Bedrock Mantle for GPT before the response returns. Kimi has no fallback, so its Bedrock errors go straight back to the caller.",
+             "요청은 인증과 요청 한도, rule 매칭, interceptor, Cedar 정책을 거쳐 Bedrock Global CRIS로 가고, fallback 대상 오류이면 Claude는 Claude Platform on AWS로, GPT는 Bedrock Mantle로 넘어간 뒤 응답이 반환됩니다. Kimi는 fallback이 없어 Bedrock 오류가 바로 호출자에게 돌아갑니다.")
     return f'''<svg viewBox="0 {TOP} {W} {H - TOP}" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="{P}-title {P}-desc">
 <title id="{P}-title">{esc(title)}</title>
 <desc id="{P}-desc">{esc(desc)}</desc>
@@ -358,8 +358,8 @@ def sequence():
     notes = [
         T("NOT ON 400: the error returns to the caller unchanged.   NOT AFTER THE FIRST BYTE: once a stream has started, the caller gets a partial response and an error, and retries.",
           "400은 fallback하지 않음: 오류를 그대로 호출자에게 돌려줍니다.   첫 바이트 이후에는 fallback하지 않음: 스트림이 시작되면 호출자는 부분 응답과 오류를 받고 재시도합니다."),
-        T("BILLING: each attempt is one gateway invocation, so an open breaker also saves the failed attempt.   GPT takes the same path, with Bedrock Mantle as the fallback.",
-          "과금: 시도 한 번이 gateway 호출 한 번이므로, 회로 차단기가 열리면 실패할 시도 비용도 줄어듭니다.   GPT도 같은 순서로 동작하며 fallback 대상은 Bedrock Mantle입니다."),
+        T("BILLING: each attempt is one gateway invocation, so an open breaker also saves the failed attempt.   GPT takes the same path, with Bedrock Mantle as the fallback; Kimi has none.",
+          "과금: 시도 한 번이 gateway 호출 한 번이므로, 회로 차단기가 열리면 실패할 시도 비용도 줄어듭니다.   GPT도 같은 순서로 동작하며 fallback 대상은 Bedrock Mantle입니다. Kimi는 fallback이 없습니다."),
     ]
     note = "\n".join(f'<text x="24" y="{612 + 18 * i}" fill="{MUTED}" font-size="10" font-family="{MONO}">{esc(t)}</text>' for i, t in enumerate(notes))
     leg = legend(680, W, [
@@ -455,9 +455,9 @@ COPY = {
         title="AgentCore LLM Gateway — Architecture",
         eyebrow="Architecture / Amazon Bedrock AgentCore Gateway",
         h1="AgentCore LLM Gateway — architecture and request flow",
-        subtitle="One gateway in Seoul sends Claude 5.5 and GPT 6.x requests to Bedrock Global CRIS first. On failure, Claude falls back to Claude Platform on AWS (1P) and GPT to Bedrock Mantle in us-east-1. Source: <code>lib/</code> (CDK), <code>lambda/</code>.",
+        subtitle="One gateway in Seoul sends Claude 5.5, GPT 6.x and Kimi K3.1 requests to Bedrock Global CRIS first. On failure, Claude falls back to Claude Platform on AWS (1P) and GPT to Bedrock Mantle in us-east-1; Kimi has no fallback. Source: <code>lib/</code> (CDK), <code>lambda/</code>.",
         h2a="1. Architecture",
-        capa="Zones: Seoul account and Region (gateway, 3P primary, 1P proxy); CPonAWS account (Claude fallback); us-east-1 (GPT fallback). Clients hold only a Cognito JWT; every backend credential stays on the gateway side.",
+        capa="Zones: Seoul account and Region (gateway, 3P primary, 1P proxy); CPonAWS account (Claude fallback); us-east-1 (GPT fallback). Kimi has no fallback and uses only Bedrock Global CRIS. Clients hold only a Cognito JWT; every backend credential stays on the gateway side.",
         h2b="2. Request flow",
         capb="Order: rate limits → rules (documented); rules → interceptor (verified on this deployment); interceptor → Cedar policy (AWS documentation). Red chips are the HTTP status returned when a step rejects the request.",
         h2c="3. Fallback over time",
@@ -470,6 +470,9 @@ COPY = {
                ("GPT 6.x", "accent", "Bedrock → Mantle us-east-1",
                 ["API: Chat Completions, Responses", "Primary <code>global.openai.gpt-6*</code>",
                  "Fallback <code>mantle</code> (data leaves for the US during a fallback)", "Tell: <code>model</code> = <code>openai.*</code> means fallback"]),
+               ("Kimi K3.1", "ink", "Bedrock only, no fallback",
+                ["API: Chat Completions, Responses", "Primary <code>global.moonshotai.kimi-k3.1</code>",
+                 "No fallback: Bedrock errors go straight back to the caller", "Anthropic Messages gets a 400 with guidance, as for GPT"]),
                ("Operations", "ink", "What to check",
                 ["Drill: <code>*-failover-drill</code>", "Alarm <code>FallbackActive</code>", "Logs <code>body.routing.reason</code>", "Checks <code>scripts/smoke_test.py</code>"])],
     ),
@@ -478,9 +481,9 @@ COPY = {
         title="AgentCore LLM Gateway — 아키텍처",
         eyebrow="Architecture / Amazon Bedrock AgentCore Gateway",
         h1="AgentCore LLM Gateway — 아키텍처와 요청 흐름",
-        subtitle="서울 리전의 단일 Gateway가 Claude 5.5와 GPT 6.x 요청을 모두 Bedrock Global CRIS로 먼저 보냅니다. 실패하면 Claude는 Claude Platform on AWS(1P)로, GPT는 Bedrock Mantle us-east-1로 넘어갑니다. 소스: <code>lib/</code> (CDK), <code>lambda/</code>.",
+        subtitle="서울 리전의 단일 Gateway가 Claude 5.5, GPT 6.x, Kimi K3.1 요청을 모두 Bedrock Global CRIS로 먼저 보냅니다. 실패하면 Claude는 Claude Platform on AWS(1P)로, GPT는 Bedrock Mantle us-east-1로 넘어갑니다. Kimi는 fallback이 없습니다. 소스: <code>lib/</code> (CDK), <code>lambda/</code>.",
         h2a="① 아키텍처",
-        capa="구역: 서울 계정과 리전 (Gateway, 3P primary, 1P proxy), CPonAWS 계정 (Claude fallback), us-east-1 (GPT fallback). 클라이언트는 Cognito JWT만 갖고, 백엔드 자격증명은 모두 Gateway 쪽에 있습니다.",
+        capa="구역: 서울 계정과 리전 (Gateway, 3P primary, 1P proxy), CPonAWS 계정 (Claude fallback), us-east-1 (GPT fallback). Kimi는 fallback 없이 Bedrock Global CRIS만 씁니다. 클라이언트는 Cognito JWT만 갖고, 백엔드 자격증명은 모두 Gateway 쪽에 있습니다.",
         h2b="② 요청 흐름",
         capb="처리 순서: rate limit → rule (문서 기준), rule → interceptor (배포 환경에서 검증), interceptor → Cedar policy (AWS 문서 기준). 빨간 칩은 그 단계에서 거부될 때의 HTTP 상태 코드입니다.",
         h2c="③ 시간 순서로 본 Fallback",
@@ -493,6 +496,9 @@ COPY = {
                ("GPT 6.x", "accent", "Bedrock → Mantle us-east-1",
                 ["API: Chat Completions, Responses", "Primary <code>global.openai.gpt-6*</code>",
                  "Fallback <code>mantle</code> (fallback 중에는 데이터가 미국으로 감)", "판별: <code>model</code>이 <code>openai.*</code>이면 fallback"]),
+               ("Kimi K3.1", "ink", "Bedrock 전용, fallback 없음",
+                ["API: Chat Completions, Responses", "Primary <code>global.moonshotai.kimi-k3.1</code>",
+                 "Fallback 없음 (Bedrock 오류를 그대로 반환)", "Anthropic Messages 요청은 400과 안내 메시지 반환 (GPT와 같음)"]),
                ("Operations", "ink", "점검 포인트",
                 ["Drill: <code>*-failover-drill</code>", "알람 <code>FallbackActive</code>", "로그 <code>body.routing.reason</code>", "검증 <code>scripts/smoke_test.py</code>"])],
     ),
@@ -534,7 +540,7 @@ h2 {{ font-size: 1.125rem; font-weight: 700; margin: 2.5rem 0 1rem; }}
 figure {{ overflow-x: auto; }}
 svg {{ width: 100%; min-width: 960px; display: block; }}
 figcaption {{ font-family: var(--mono); font-size: 0.7rem; color: var(--soft); margin-top: 0.5rem; }}
-.cards {{ display: grid; grid-template-columns: 1.1fr 1fr 0.9fr; gap: 1rem; margin-top: 2.5rem; }}
+.cards {{ display: grid; grid-template-columns: 1.1fr 1fr 1fr 0.9fr; gap: 1rem; margin-top: 2.5rem; }}
 .card {{ border: 1px solid var(--rule); border-radius: 6px; padding: 1.25rem; }}
 .card .eyebrow {{ margin-bottom: 0.25rem; }}
 .card h3 {{ font-size: 1rem; font-weight: 700; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem; }}

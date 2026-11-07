@@ -78,6 +78,7 @@ def t_models():
         ids = [m["id"] for m in json.loads(resp.read())["data"]]
     want = [f"bedrock/global.anthropic.{m}" for m in (HAIKU, SONNET, OPUS)]
     want += [f"bedrock/global.openai.{m}" for m in GPT_MODELS] + [f"mantle/openai.{m}" for m in GPT_MODELS]
+    want += [f"bedrock/global.moonshotai.{KIMI}"]
     if fallback_enabled():
         want += [f"cponaws/{m}" for m in (HAIKU, SONNET, OPUS)]
     missing = [w for w in want if w not in ids]
@@ -311,6 +312,7 @@ def t_rate_limit():
 
 GPT_MODELS = ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]
 GPT_DRILL = "gpt-6-luna-failover-drill"
+KIMI = "kimi-k3.1"
 CLAUDE_DRILL = "claude-haiku-5-5-failover-drill"
 # Evidence window start; EVIDENCE_SINCE (epoch seconds) re-checks an earlier run.
 START = float(os.environ.get("EVIDENCE_SINCE", time.time()))
@@ -375,6 +377,36 @@ def t_gpt():
     record("gpt failover drill (response)", bool(text), f"model={r.model} {time.time() - t0:.1f}s text={text[:30]!r}")
 
 
+@check("kimi")
+def t_kimi():
+    # Bedrock Global CRIS only (no fallback). A 429 here usually means the account's
+    # Global cross-Region TPM quota for Kimi is still 0: see quota-headroom.
+    # The interceptor answers this one without calling Bedrock, so it runs first.
+    try:
+        ask("team-standard", KIMI)
+        record("kimi via Anthropic SDK → guidance 400", False, "unexpectedly succeeded")
+    except anthropic.APIStatusError as e:
+        record("kimi via Anthropic SDK → guidance 400", e.status_code == 400 and "OpenAI" in str(e.body), f"{e.status_code} {str(e.body)[:120]}")
+
+    for m in (KIMI, f"global.moonshotai.{KIMI}", f"moonshotai.{KIMI}"):
+        t0 = time.time()
+        r, text = chat("team-standard", m)
+        record(f"kimi chat {m}", bool(text), f"model={r.model} {time.time() - t0:.1f}s text={text[:30]!r}")
+
+    chunks, text = 0, ""
+    for ev in oai("team-standard").chat.completions.create(
+        model=KIMI, messages=[{"role": "user", "content": "Count from 1 to 10."}],
+        max_completion_tokens=512, stream=True,
+    ):
+        if ev.choices and ev.choices[0].delta and ev.choices[0].delta.content:
+            chunks += 1
+            text += ev.choices[0].delta.content
+    record(f"kimi chat streaming {KIMI}", chunks > 1, f"chunks={chunks} text={text.strip()[:40]!r}")
+
+    r = oai("team-standard").responses.create(model=KIMI, input="Reply with exactly: pong", max_output_tokens=512)
+    record(f"kimi responses API {KIMI}", bool(r.output_text.strip()), f"model={r.model} text={r.output_text.strip()[:30]!r}")
+
+
 @check("quota-headroom")
 def t_quota_headroom():
     # Per-model gateway TPM must stay at or below 80% of the account's Global cross-Region TPM
@@ -386,14 +418,18 @@ def t_quota_headroom():
     quotas = {}
     for page in boto3.client("service-quotas", region_name=gwlib.REGION).get_paginator(
             "list_service_quotas").paginate(ServiceCode="bedrock"):
-        quotas.update({q["QuotaName"]: q["Value"] for q in page["Quotas"]})
+        # Some entries carry no Value (seen on new models' tokens-per-day quotas).
+        quotas.update({q["QuotaName"]: q.get("Value") for q in page["Quotas"]})
 
     def quota_name(model_id):
         m = re.fullmatch(r"global\.anthropic\.claude-([a-z]+)-(\d+)-(\d+)", model_id)
         if m:
             return f"Anthropic Claude {m[1].title()} {m[2]}.{m[3]}"
         m = re.fullmatch(r"global\.openai\.gpt-([\d.]+)-([a-z]+)", model_id)
-        return f"GPT-{m[1]} {m[2].title()}" if m else None
+        if m:
+            return f"GPT-{m[1]} {m[2].title()}"
+        m = re.fullmatch(r"global\.moonshotai\.kimi-k([\d.]+)", model_id)
+        return f"Moonshot AI Kimi K{m[1]}" if m else None
 
     for entry in entries:
         model_id = entry["dimensions"]["qualifiedModelId"]
@@ -404,6 +440,9 @@ def t_quota_headroom():
         quota = quotas.get(f"Global cross-region model inference tokens per minute for {name}")
         if quota is None:
             record(f"quota-headroom {model_id}", False, "no matching Service Quotas entry")
+            continue
+        if not quota:
+            record(f"quota-headroom {model_id}", False, f"gateway {tpm:,.0f} TPM / quota 0: Bedrock throttles every call")
             continue
         record(f"quota-headroom {model_id}", tpm <= headroom * quota,
                f"gateway {tpm:,.0f} / quota {quota:,.0f} TPM ({tpm / quota:.0%}, limit {headroom:.0%})")
@@ -421,7 +460,9 @@ def t_routing_evidence():
     )
     check_gpt = "gpt" in RAN or "EVIDENCE_SINCE" in os.environ
     check_claude = "failover" in RAN or "EVIDENCE_SINCE" in os.environ
-    expected = (set(GPT_MODELS) | {GPT_DRILL} if check_gpt else set()) | ({CLAUDE_DRILL} if check_claude else set())
+    check_kimi = "kimi" in RAN or "EVIDENCE_SINCE" in os.environ
+    expected = ((set(GPT_MODELS) | {GPT_DRILL} if check_gpt else set()) | ({CLAUDE_DRILL} if check_claude else set())
+                | ({KIMI} if check_kimi else set()))
     rows, deadline = [], time.time() + 240
     while time.time() < deadline:  # vended logs arrive with a delay; wait for every expected request
         qid = logs.start_query(logGroupName=gwlib.outputs()["GatewayLogGroup"], startTime=int(START) - 60,
@@ -442,13 +483,15 @@ def t_routing_evidence():
     if check_gpt:
         record("evidence: GPT primary = bedrock", all(by_req.get(m) == {"bedrock"} for m in GPT_MODELS), str({m: sorted(by_req.get(m, [])) for m in GPT_MODELS}))
         record("evidence: GPT drill served by mantle", by_req.get(GPT_DRILL) == {"mantle"}, str(sorted(by_req.get(GPT_DRILL, []))))
+    if check_kimi:
+        record("evidence: Kimi served by bedrock", by_req.get(KIMI) == {"bedrock"}, str(sorted(by_req.get(KIMI, []))))
     if check_claude:
         record("evidence: Claude drill served by cponaws", by_req.get(CLAUDE_DRILL) == {"cponaws"}, str(sorted(by_req.get(CLAUDE_DRILL, []))))
 
 
 RAN: set = set()
 CHECKS = [t_models, t_route_3p, t_streaming, t_alias, t_metadata, t_openai, t_bedrock_sdk, t_guardrail, t_policy, t_failover,
-          t_experiment, t_gpt, t_rate_limit, t_quota_headroom, t_routing_evidence]
+          t_experiment, t_gpt, t_kimi, t_rate_limit, t_quota_headroom, t_routing_evidence]
 
 
 def main():

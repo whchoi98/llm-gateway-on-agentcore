@@ -69,7 +69,7 @@
 <text x="1016" y="78" fill="#545B64" font-size="11" font-family="'Amazon Ember Mono', 'D2Coding', 'Noto Sans Mono CJK KR', ui-monospace, monospace">Claude: CPonAWS (1P)</text>
 <text x="1016" y="94" fill="#545B64" font-size="11" font-family="'Amazon Ember Mono', 'D2Coding', 'Noto Sans Mono CJK KR', ui-monospace, monospace">GPT: Mantle us-east-1</text>
 <text x="24" y="612" fill="#545B64" font-size="10" font-family="'Amazon Ember Mono', 'D2Coding', 'Noto Sans Mono CJK KR', ui-monospace, monospace">400은 fallback하지 않음: 오류를 그대로 호출자에게 돌려줍니다.   첫 바이트 이후에는 fallback하지 않음: 스트림이 시작되면 호출자는 부분 응답과 오류를 받고 재시도합니다.</text>
-<text x="24" y="630" fill="#545B64" font-size="10" font-family="'Amazon Ember Mono', 'D2Coding', 'Noto Sans Mono CJK KR', ui-monospace, monospace">과금: 시도 한 번이 gateway 호출 한 번이므로, 회로 차단기가 열리면 실패할 시도 비용도 줄어듭니다.   GPT도 같은 순서로 동작하며 fallback 대상은 Bedrock Mantle입니다.</text>
+<text x="24" y="630" fill="#545B64" font-size="10" font-family="'Amazon Ember Mono', 'D2Coding', 'Noto Sans Mono CJK KR', ui-monospace, monospace">과금: 시도 한 번이 gateway 호출 한 번이므로, 회로 차단기가 열리면 실패할 시도 비용도 줄어듭니다.   GPT도 같은 순서로 동작하며 fallback 대상은 Bedrock Mantle입니다. Kimi는 fallback이 없습니다.</text>
 <line x1="24" y1="672" x2="1256" y2="672" stroke="rgba(35,47,62,0.10)" stroke-width="0.8"/>
 <text x="24" y="692" fill="#545B64" font-size="8" font-family="'Amazon Ember Mono', 'D2Coding', 'Noto Sans Mono CJK KR', ui-monospace, monospace" letter-spacing="0.14em">범례</text>
 <line x1="104" y1="688" x2="136" y2="688" stroke="#0972D3" stroke-width="1.2"/>
